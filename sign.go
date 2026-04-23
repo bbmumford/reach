@@ -146,3 +146,62 @@ func appendLenPrefixed(dst, data []byte) []byte {
 	dst = append(dst, data...)
 	return dst
 }
+
+// signDelta signs a DeltaRecord with the given Ed25519 key. The canonical
+// form covers all fields a reader would use to decide accept/reject so a
+// delta can't be replayed, re-parented, or truncated.
+func signDelta(d *DeltaRecord, key ed25519.PrivateKey) {
+	content := canonicalDeltaBytes(d)
+	d.PubKey = key.Public().(ed25519.PublicKey)
+	d.Signature = ed25519.Sign(key, content)
+}
+
+// VerifyDelta checks the Ed25519 signature on a DeltaRecord. Same errors as Verify.
+func VerifyDelta(d DeltaRecord) error {
+	if len(d.PubKey) == 0 || len(d.Signature) == 0 {
+		return ErrUnsignedRecord
+	}
+	if len(d.PubKey) != ed25519.PublicKeySize || len(d.Signature) != ed25519.SignatureSize {
+		return ErrSignatureInvalid
+	}
+	content := canonicalDeltaBytes(&d)
+	if !ed25519.Verify(d.PubKey, content, d.Signature) {
+		return ErrSignatureInvalid
+	}
+	return nil
+}
+
+func canonicalDeltaBytes(d *DeltaRecord) []byte {
+	var buf []byte
+	buf = appendLenPrefixed(buf, []byte("reach-delta:v1"))
+	buf = appendLenPrefixed(buf, []byte(d.NodeID))
+	buf = appendLenPrefixed(buf, []byte(d.TenantID))
+
+	var v [2]byte
+	binary.BigEndian.PutUint16(v[:], d.SchemaVersion)
+	buf = appendLenPrefixed(buf, v[:])
+
+	buf = appendLenPrefixed(buf, []byte(d.HLC.String()))
+
+	var ep [8]byte
+	binary.BigEndian.PutUint64(ep[:], d.Epoch)
+	buf = appendLenPrefixed(buf, ep[:])
+
+	buf = appendLenPrefixed(buf, []byte(d.BaseDigest))
+
+	// Ops must hash in a deterministic order — already sorted by AddrKey
+	// when computeDelta produced them, but defend against caller mutation.
+	ops := make([]string, len(d.Ops))
+	for i, op := range d.Ops {
+		line := string(op.Op) + "|" + op.AddrKey
+		if op.Addr != nil {
+			line += "|" + op.Addr.Key() + "|" + strconv.FormatUint(uint64(op.Addr.Confidence), 10)
+		}
+		ops[i] = line
+	}
+	sort.Strings(ops)
+	for _, line := range ops {
+		buf = appendLenPrefixed(buf, []byte(line))
+	}
+	return buf
+}

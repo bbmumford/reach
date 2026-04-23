@@ -150,3 +150,8 @@ func PlatformSource() EventSource {
 	}
 	return NewDefaultPoller()
 }
+
+// platformPowerSource returns the Windows sleep/wake detector.
+func platformPowerSource() EventSource {
+	return NewWindowsPowerSource()
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/bbmumford/reach"
@@ -48,8 +49,27 @@ type STUNConfig struct {
 	EnabledFunc func(provider string) bool
 }
 
+// NATType classifies the node's NAT behaviour based on RFC 5780 probing.
+// Derived from two Binding Requests against the same STUN server: if the
+// reflexive addresses match for two requests sent from the same local port,
+// the NAT is endpoint-independent; if they differ, it's symmetric.
+//
+// The publisher uses this to decide whether to publish the srflx address:
+// symmetric NATs rewrite the source port per destination, so the reflexive
+// address is useless for peer-to-peer dial. Symmetric nodes advertise only
+// TURN and WSS addresses.
+type NATType string
+
+const (
+	NATUnknown      NATType = ""
+	NATOpen         NATType = "open"            // no NAT / endpoint-independent mapping
+	NATSymmetric    NATType = "symmetric"       // rewrites source port per dest; srflx unusable
+	NATRestricted   NATType = "restricted"      // address-dependent filtering
+)
+
 // STUN discovers the node's server-reflexive address by sending RFC 5389
-// Binding Requests to one or more STUN servers.
+// Binding Requests to one or more STUN servers. Probes two servers in
+// sequence to classify NAT behaviour per RFC 5780 §4.3.
 //
 // Disabled by default on Fly.io — Fly's egress IP differs from the dedicated
 // anycast ingress IP, so STUN returns a misleading answer there. DNS self-
@@ -61,6 +81,9 @@ type STUNConfig struct {
 type STUN struct {
 	Base
 	cfg STUNConfig
+
+	mu         sync.Mutex
+	lastNATType NATType
 }
 
 // NewSTUN constructs a STUN discoverer from a STUNConfig.
@@ -84,7 +107,10 @@ func NewSTUN(cfg STUNConfig) *STUN {
 }
 
 // Discover dials each configured server in turn and returns the first
-// reflexive address observed.
+// reflexive address observed. When two or more servers are configured,
+// it also classifies NAT type by comparing reflexive mappings (RFC 5780
+// §4.3): matching XOR-MAPPED addresses across distinct servers imply
+// endpoint-independent mapping; differing addresses imply symmetric NAT.
 func (s *STUN) Discover(ctx context.Context) ([]reach.Address, error) {
 	if len(s.cfg.ServerAddrs) == 0 {
 		return nil, nil
@@ -99,13 +125,58 @@ func (s *STUN) Discover(ctx context.Context) ([]reach.Address, error) {
 		auth = a
 	}
 
+	var first *reach.Address
+	var second *reach.Address
 	for _, addr := range s.cfg.ServerAddrs {
 		a, err := s.probe(ctx, addr, auth)
-		if err == nil && a != nil {
-			return []reach.Address{*a}, nil
+		if err != nil || a == nil {
+			continue
+		}
+		if first == nil {
+			first = a
+			continue
+		}
+		second = a
+		break
+	}
+	if first == nil {
+		return nil, nil
+	}
+
+	natType := NATUnknown
+	if second != nil {
+		if first.Host == second.Host {
+			natType = NATOpen
+		} else {
+			natType = NATSymmetric
 		}
 	}
-	return nil, nil
+	s.mu.Lock()
+	s.lastNATType = natType
+	s.mu.Unlock()
+
+	// Symmetric NAT: srflx address is useless for peers dialling from any
+	// other source (the NAT will rewrite the source port per destination).
+	// Publish with Capabilities=0, low confidence and a tag so the publisher
+	// can downgrade — but do not fully suppress: some peers may still land
+	// via hole-punching if we coordinate via TURN.
+	if natType == NATSymmetric {
+		first.Confidence = 15
+		first.Tags = append(first.Tags, "nat:symmetric")
+	} else if natType == NATOpen {
+		first.Confidence = 50
+		first.Tags = append(first.Tags, "nat:open")
+	}
+	return []reach.Address{*first}, nil
+}
+
+// LastNATType returns the most recently classified NAT type (or NATUnknown
+// before the first successful multi-server probe). Consumers that want to
+// react to NAT changes poll this.
+func (s *STUN) LastNATType() NATType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastNATType
 }
 
 func (s *STUN) probe(ctx context.Context, serverAddr string, auth STUNAuth) (*reach.Address, error) {

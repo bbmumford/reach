@@ -51,6 +51,11 @@ func (p *Publisher) saveLastGood(rec ReachRecord) error {
 
 // loadLastGood restores the in-memory digest from disk on cold start.
 // Non-fatal — a missing file just means "no prior state".
+//
+// Seeds the Epoch: if the persisted Epoch is at-or-after the newly-generated
+// one, we bump the in-memory Epoch to prev+1 so strict monotonicity holds
+// across restarts even when the wall clock rolls backward between process
+// lifetimes (plan §5.31).
 func (p *Publisher) loadLastGood() error {
 	if p.cfg.PersistPath == "" {
 		return nil
@@ -70,5 +75,8 @@ func (p *Publisher) loadLastGood() error {
 	defer p.mu.Unlock()
 	p.lastDigest = payload.Digest
 	p.lastAddresses = payload.Addresses
+	if payload.Epoch >= p.cfg.Epoch {
+		p.cfg.Epoch = payload.Epoch + 1
+	}
 	return nil
 }

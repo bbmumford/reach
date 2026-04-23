@@ -9,3 +9,8 @@ package events
 func PlatformSource() EventSource {
 	return NewDefaultPoller()
 }
+
+// platformPowerSource returns a no-op for unsupported platforms.
+func platformPowerSource() EventSource {
+	return NewDefaultPoller()
+}

@@ -18,6 +18,7 @@ type Metrics interface {
 	AddressVerified(source AddressSource, family Family)
 	AddressVerifyFailed(source AddressSource, family Family)
 	AddressExpired(source AddressSource)
+	AddressRTT(source AddressSource, family Family, region string, rtt time.Duration)
 
 	SignatureInvalid()
 	RateLimited(nodeID string)
@@ -25,6 +26,8 @@ type Metrics interface {
 	FreshnessDigestMismatch(peer string)
 	HLCSkewMicros(deltaMicros int64)
 	ReflectionQuorum(observed int, required int)
+	DeltaPublished(opsCount int)
+	DeltaSnapshotForced(reason string)
 }
 
 // PublishReason describes why a publish was attempted.
@@ -61,9 +64,12 @@ func (NullMetrics) DiscovererRun(string, time.Duration, int, error)    {}
 func (NullMetrics) AddressVerified(AddressSource, Family)              {}
 func (NullMetrics) AddressVerifyFailed(AddressSource, Family)          {}
 func (NullMetrics) AddressExpired(AddressSource)                       {}
+func (NullMetrics) AddressRTT(AddressSource, Family, string, time.Duration) {}
 func (NullMetrics) SignatureInvalid()                                  {}
 func (NullMetrics) RateLimited(string)                                 {}
 func (NullMetrics) TombstonePublished(string)                          {}
 func (NullMetrics) FreshnessDigestMismatch(string)                     {}
 func (NullMetrics) HLCSkewMicros(int64)                                {}
 func (NullMetrics) ReflectionQuorum(int, int)                          {}
+func (NullMetrics) DeltaPublished(int)                                 {}
+func (NullMetrics) DeltaSnapshotForced(string)                         {}

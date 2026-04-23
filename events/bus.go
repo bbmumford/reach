@@ -79,6 +79,13 @@ type EventSource interface {
 	Close() error
 }
 
+// PowerSource returns a platform-specific sleep/wake event source. The
+// returned source fires a SourceWake event whenever the clock gap between
+// polls suggests the host just resumed. Lives in power_<OS>.go.
+func PowerSource() EventSource {
+	return platformPowerSource()
+}
+
 // Poller is a cross-platform fallback event source that polls interface state
 // every Interval and emits AddressAdd/AddressRemove events when it changes.
 // Suitable when platform-specific hooks aren't available.

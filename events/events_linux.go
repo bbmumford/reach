@@ -91,3 +91,8 @@ func PlatformSource() EventSource {
 	}
 	return NewDefaultPoller()
 }
+
+// platformPowerSource returns the Linux sleep/wake detector (clock-gap heuristic).
+func platformPowerSource() EventSource {
+	return NewLinuxPowerSource()
+}

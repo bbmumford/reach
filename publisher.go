@@ -24,15 +24,19 @@ type Publisher struct {
 	cfg *Config
 
 	scheduler *scheduler
+	prober    *Prober // nil when VerifyTransport not configured
 	eventCh   chan AddressChange // external events (netlink, role change, etc.)
 	forceCh   chan PublishReason // internal "publish now" requests
 
 	// State.
-	mu              sync.Mutex
-	lastDigest      string
-	lastAddresses   []Address
-	lastPublishedAt time.Time
-	shuttingDown    bool
+	mu                 sync.Mutex
+	lastDigest         string
+	lastAddresses      []Address
+	lastPublishedAt    time.Time
+	lastFullSnapAt     time.Time
+	deltasSinceFull    int
+	shuttingDown       bool
+	wrappedDiscoverers []Discoverer // cached backoff-wrapped discoverers
 }
 
 // AddressChange is emitted by the event bus when something suggests the node's
@@ -55,12 +59,20 @@ func NewPublisher(cfg Config) (*Publisher, error) {
 	}
 	cfg.defaults()
 
-	return &Publisher{
+	p := &Publisher{
 		cfg:       &cfg,
 		scheduler: newScheduler(&cfg),
 		eventCh:   make(chan AddressChange, 32),
 		forceCh:   make(chan PublishReason, 4),
-	}, nil
+	}
+	if cfg.VerifyTransport != nil {
+		p.prober = NewProber(cfg.VerifyTransport, ProberConfig{
+			Metrics:               cfg.Metrics,
+			RTTTracker:            cfg.RTTTracker,
+			MinRegionsForVerified: 2,
+		})
+	}
+	return p, nil
 }
 
 // Run blocks until ctx is cancelled. It runs the discoverer orchestrator on
@@ -69,14 +81,17 @@ func NewPublisher(cfg Config) (*Publisher, error) {
 //
 // On ctx cancel it publishes a shutdown tombstone before returning.
 func (p *Publisher) Run(ctx context.Context) {
+	// Restore persisted digest BEFORE the initial publish so a cold restart
+	// with no address-set change can skip the initial publish entirely.
+	// Also seeds Epoch from disk when available so epoch never moves
+	// backward across restarts (plan §5.3 / §5.31).
+	_ = p.loadLastGood()
+
 	// Prime: run a full discovery cycle synchronously so the initial publish
 	// happens within the caller's bootstrap window.
 	if err := p.publishOnce(ctx, PublishReasonBootstrap); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("[reach] initial publish failed: %v", err)
 	}
-
-	// Restore persisted digest so we can skip re-publishing if nothing changed.
-	_ = p.loadLastGood()
 
 	timer := time.NewTimer(p.scheduler.next(time.Now()))
 	defer timer.Stop()
@@ -142,6 +157,15 @@ func (p *Publisher) ForcePublish(reason PublishReason) {
 	}
 }
 
+// NotifyRoleChange is the consumer-facing hook consumed when the mesh
+// runtime mutates a node's role set. It stamps the agent-profile or
+// edge-anchor capability bit on subsequent publishes and forces an immediate
+// re-publish so peers see the change in the next gossip round. Plan §5.4
+// event #9.
+func (p *Publisher) NotifyRoleChange() {
+	p.ForcePublish(PublishReasonEvent)
+}
+
 // LastDigest returns the digest of the most recently published address set.
 // Useful for freshness-gossip digesting and admin debugging.
 func (p *Publisher) LastDigest() string {
@@ -172,6 +196,19 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 		return nil
 	}
 
+	// Probe: ask peers to verify each public address. Successful verification
+	// bumps Confidence to ≥60 and stamps LastVerified + RTTMicros. Failures
+	// demote to <20. When probing isn't configured (no VerifyTransport) this
+	// is a no-op and Confidence stays at discoverer-initial values.
+	addrs = p.applyProbes(ctx, addrs)
+	// Enrich RegionPriority from the RTT tracker so peers dial the
+	// region-nearest entry first.
+	addrs = p.applyRegionPriority(addrs)
+	// Age-based GC: §5.20 — drop non-Static addresses we haven't verified
+	// in 30min. TTL-expired entries were already dropped in applyTTLs;
+	// this catches entries whose TTL is longer than the verify window.
+	addrs = p.applyVerificationGC(addrs, now)
+
 	digest := Digest(addrs)
 
 	p.mu.Lock()
@@ -188,11 +225,56 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 		return nil
 	}
 
-	rec := p.buildRecord(addrs, now)
-	if err := p.appendToLedger(ctx, rec); err != nil {
-		p.cfg.Metrics.PublishFailed(err)
-		return err
+	// Decide between full snapshot vs delta. First publish is always full;
+	// every DeltaThreshold publishes (or DeltaMaxAge) is full; anything in
+	// between that actually has a prior state can ship as a delta.
+	p.mu.Lock()
+	prevAddrs := p.lastAddresses
+	prevDigest := p.lastDigest
+	snapAge := now.Sub(p.lastFullSnapAt)
+	deltasSince := p.deltasSinceFull
+	p.mu.Unlock()
+
+	fullSnapshot := reason == PublishReasonBootstrap ||
+		reason == PublishReasonEpoch ||
+		prevDigest == "" ||
+		deltasSince >= p.cfg.DeltaThreshold ||
+		snapAge >= p.cfg.DeltaMaxAge
+
+	var recordBytes int
+	if fullSnapshot {
+		rec := p.buildRecord(addrs, now)
+		if err := p.appendToLedger(ctx, rec); err != nil {
+			p.cfg.Metrics.PublishFailed(err)
+			return err
+		}
+		recordBytes = approxRecordBytes(rec)
+		_ = p.saveLastGood(rec)
+		p.mu.Lock()
+		p.lastFullSnapAt = now
+		p.deltasSinceFull = 0
+		p.mu.Unlock()
+	} else {
+		ops := computeDelta(prevAddrs, addrs)
+		if len(ops) == 0 {
+			// No structural change reached this branch (TTL refresh path
+			// would have taken us here with fullSnapshot=false and no ops).
+			// Skip the append; the digest guard upstream already prevented
+			// a spurious identical publish.
+			p.cfg.Metrics.PublishSkipped(SkipDigestMatch)
+			return nil
+		}
+		drec := p.buildDelta(ops, prevDigest, now)
+		if err := p.appendDeltaToLedger(ctx, drec); err != nil {
+			p.cfg.Metrics.PublishFailed(err)
+			return err
+		}
+		recordBytes = approxDeltaBytes(drec)
+		p.mu.Lock()
+		p.deltasSinceFull++
+		p.mu.Unlock()
 	}
+
 	p.broadcastFreshness(digest)
 
 	p.mu.Lock()
@@ -201,10 +283,8 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 	p.lastPublishedAt = now
 	p.mu.Unlock()
 
-	_ = p.saveLastGood(rec)
-
-	p.cfg.Metrics.PublishSucceeded(approxRecordBytes(rec))
-	if digest != p.lastDigest {
+	p.cfg.Metrics.PublishSucceeded(recordBytes)
+	if digest != prevDigest {
 		p.scheduler.noteChange(now)
 	}
 	return nil
@@ -213,6 +293,12 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 // discoverAll runs every configured discoverer concurrently and returns the
 // union of their results. Discoverers that error are logged and skipped —
 // a partial result set is preferable to no publish at all.
+//
+// Each discoverer is wrapped in per-instance exponential-backoff state so
+// a persistently-failing source (e.g. STUN server down, IMDS unreachable)
+// doesn't block every publish tick and doesn't flood logs/metrics. See
+// discoverer.WithBackoff for the schedule (1s, 2s, 4s, 8s, 16s, capped at
+// Interval).
 func (p *Publisher) discoverAll(ctx context.Context) ([]Address, error) {
 	if len(p.cfg.Discoverers) == 0 {
 		return nil, nil
@@ -226,8 +312,13 @@ func (p *Publisher) discoverAll(ctx context.Context) ([]Address, error) {
 	}
 	resCh := make(chan dresult, len(p.cfg.Discoverers))
 
+	// First call wraps each discoverer in backoff state (sync.Once-style
+	// inside backoffState). The wrapper is cached on the Publisher so the
+	// failure counter persists across ticks.
+	wrapped := p.wrapDiscoverers()
+
 	var wg sync.WaitGroup
-	for _, d := range p.cfg.Discoverers {
+	for _, d := range wrapped {
 		if !d.EnabledFor(p.cfg.Provider) {
 			continue
 		}
@@ -235,7 +326,13 @@ func (p *Publisher) discoverAll(ctx context.Context) ([]Address, error) {
 		go func(d Discoverer) {
 			defer wg.Done()
 			start := time.Now()
-			dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			// 500ms deadline on bootstrap for tight first-publish budget;
+			// 3s otherwise — IMDS and DNS can genuinely take that long.
+			budget := 3 * time.Second
+			if time.Since(p.scheduler.start) < p.cfg.BootstrapDuration/3 {
+				budget = 500 * time.Millisecond
+			}
+			dctx, cancel := context.WithTimeout(ctx, budget)
 			defer cancel()
 			a, err := d.Discover(dctx)
 			resCh <- dresult{name: d.Name(), addrs: a, err: err, dur: time.Since(start)}
@@ -268,6 +365,91 @@ func (p *Publisher) discoverAll(ctx context.Context) ([]Address, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out, nil
+}
+
+// wrapDiscoverers lazily wraps every configured discoverer in its own
+// backoff state on first call, then returns the cached wrapped slice.
+// Using per-instance backoff means a temporarily-failing STUN server
+// doesn't poison IMDS or DNS.
+//
+// The wrapping layer is imported from the discoverer subpackage via an
+// interface-typed constructor so we don't pull its package into the
+// hot-path. We use a local adapter type to avoid an import cycle between
+// reach and reach/discoverer.
+func (p *Publisher) wrapDiscoverers() []Discoverer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.wrappedDiscoverers != nil {
+		return p.wrappedDiscoverers
+	}
+	out := make([]Discoverer, len(p.cfg.Discoverers))
+	for i, d := range p.cfg.Discoverers {
+		out[i] = newBackoffWrapper(d)
+	}
+	p.wrappedDiscoverers = out
+	return out
+}
+
+// applyProbes verifies each public address against the configured peer set
+// and updates Confidence + LastVerified + RTT on the returned entries.
+// No-op when prober is nil or PeerSelector returns no peers.
+func (p *Publisher) applyProbes(ctx context.Context, addrs []Address) []Address {
+	if p.prober == nil || p.cfg.PeerSelector == nil {
+		return addrs
+	}
+	peers := p.cfg.PeerSelector()
+	if len(peers) == 0 {
+		return addrs
+	}
+	for i, a := range addrs {
+		if a.Scope != ScopePublic {
+			continue
+		}
+		addrs[i] = p.prober.Verify(ctx, a, peers)
+	}
+	return addrs
+}
+
+// applyRegionPriority stamps adaptive RegionPriority from the RTT tracker
+// onto every public-scope address. When no tracker is configured the field
+// is left untouched (discoverers can still set static hints).
+func (p *Publisher) applyRegionPriority(addrs []Address) []Address {
+	if p.cfg.RTTTracker == nil {
+		return addrs
+	}
+	for i, a := range addrs {
+		if a.Scope != ScopePublic {
+			continue
+		}
+		prio := p.cfg.RTTTracker.PriorityFor(a.Key())
+		if len(prio) > 0 {
+			if addrs[i].RegionPriority == nil {
+				addrs[i].RegionPriority = prio
+			} else {
+				// Merge: tracker wins on conflict (it has live data).
+				for k, v := range prio {
+					addrs[i].RegionPriority[k] = v
+				}
+			}
+		}
+	}
+	return addrs
+}
+
+// applyVerificationGC drops non-Static addresses whose LastVerified is older
+// than 30 minutes. Static and never-probed addresses (LastVerified zero) are
+// preserved — only verified-but-gone-stale entries are removed.
+func (p *Publisher) applyVerificationGC(addrs []Address, now time.Time) []Address {
+	const staleWindow = 30 * time.Minute
+	out := addrs[:0]
+	for _, a := range addrs {
+		if a.Source != SrcStatic && !a.LastVerified.IsZero() && now.Sub(a.LastVerified) > staleWindow {
+			p.cfg.Metrics.AddressExpired(a.Source)
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // applyTTLs fills in missing FirstSeen/ExpiresAt per discoverer's source
@@ -356,6 +538,7 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 		HLC:           hlc,
 		Epoch:         p.cfg.Epoch,
 		AddressSet:    append([]Address(nil), publicSet...),
+		ICECandidates: BuildICECandidates(publicSet),
 	}
 
 	// Seal private addresses for same-org peers if we have a key.
@@ -375,6 +558,55 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 
 	Sign(&rec, p.cfg.Signer)
 	return rec
+}
+
+// buildDelta constructs a signed DeltaRecord describing the transformation
+// from the node's last full-snapshot AddressSet to the current one.
+func (p *Publisher) buildDelta(ops []DeltaEntry, baseDigest string, now time.Time) DeltaRecord {
+	hlc := p.cfg.Clock.Tick()
+	drec := DeltaRecord{
+		NodeID:        p.cfg.NodeID,
+		TenantID:      p.cfg.TenantID,
+		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
+		HLC:           hlc,
+		Epoch:         p.cfg.Epoch,
+		BaseDigest:    baseDigest,
+		Ops:           ops,
+		UpdatedAt:     now,
+		ExpiresAt:     now.Add(p.cfg.DeltaMaxAge),
+	}
+	// Delta is signed by the same Ed25519 key as the full record; the
+	// canonical form hashes (node, base, ops) so a tampered op fails verify.
+	signDelta(&drec, p.cfg.Signer)
+	return drec
+}
+
+// appendDeltaToLedger emits a DeltaRecord to the ledger using the reach
+// topic with SchemaVersion flagged — readers know to unmarshal as delta.
+func (p *Publisher) appendDeltaToLedger(ctx context.Context, drec DeltaRecord) error {
+	body, err := MarshalDelta(&drec)
+	if err != nil {
+		return fmt.Errorf("marshal delta: %w", err)
+	}
+	envelope := lad.Record{
+		Topic:        lad.TopicReach,
+		TenantID:     drec.TenantID,
+		NodeID:       drec.NodeID,
+		Body:         body,
+		Timestamp:    drec.UpdatedAt,
+		LamportClock: uint64(drec.HLC.Wall),
+		HLCTimestamp: uint64(drec.HLC.Wall),
+		ExpiresAt:    drec.ExpiresAt,
+		AuthorPubKey: drec.PubKey,
+		Signature:    drec.Signature,
+	}
+	return p.cfg.Ledger.Append(ctx, envelope)
+}
+
+// approxDeltaBytes returns the JSON byte count for metrics.
+func approxDeltaBytes(drec DeltaRecord) int {
+	b, _ := MarshalDelta(&drec)
+	return len(b)
 }
 
 // appendToLedger wraps a ReachRecord in a ledger envelope and appends it.
