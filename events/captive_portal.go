@@ -38,13 +38,22 @@ const (
 	captivePresent
 )
 
-// NewCaptivePortalSource returns a source that probes captive.orbtr.io (or a
-// user-supplied URL). The URL should return HTTP 204 No Content for clear
-// networks — any other response indicates a portal or network hijack.
+// NewCaptivePortalSource returns a source that probes the given URL. The URL
+// must return HTTP 204 No Content (or HTTP 200 with empty body) on clear
+// networks; any other response is treated as a captive portal.
+//
+// Well-known generate_204 endpoints a consumer may choose from:
+//
+//   http://connectivitycheck.gstatic.com/generate_204    (Google / Android)
+//   http://clients3.google.com/generate_204              (Chrome OS)
+//   http://www.msftconnecttest.com/connecttest.txt       (Microsoft — body="Microsoft Connect Test")
+//   http://captive.apple.com/hotspot-detect.html         (Apple — body contains "<HTML>" on portals)
+//   http://detectportal.firefox.com/success.txt          (Mozilla — body="success")
+//
+// Consumers that run their own mesh infrastructure can host an endpoint
+// themselves that returns 204 No Content, which keeps the probe under their
+// own availability SLO. If url is empty, Start returns an error.
 func NewCaptivePortalSource(url string) *CaptivePortalSource {
-	if url == "" {
-		url = "http://captive.orbtr.io/generate_204"
-	}
 	return &CaptivePortalSource{
 		URL:      url,
 		Interval: 2 * time.Minute,
@@ -52,8 +61,12 @@ func NewCaptivePortalSource(url string) *CaptivePortalSource {
 	}
 }
 
-// Start runs the probe loop until ctx is cancelled.
+// Start runs the probe loop until ctx is cancelled. Returns an error
+// immediately if the source was constructed without a URL.
 func (s *CaptivePortalSource) Start(ctx context.Context, bus *Bus) error {
+	if s.URL == "" {
+		return errCaptivePortalNoURL
+	}
 	// Initial probe.
 	s.probe(ctx, bus)
 
@@ -68,6 +81,12 @@ func (s *CaptivePortalSource) Start(ctx context.Context, bus *Bus) error {
 		}
 	}
 }
+
+var errCaptivePortalNoURL = errNoURL{}
+
+type errNoURL struct{}
+
+func (errNoURL) Error() string { return "reach/events: captive portal source requires a URL" }
 
 // Close is a no-op; ctx cancellation is the lifecycle signal.
 func (s *CaptivePortalSource) Close() error { return nil }

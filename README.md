@@ -37,23 +37,36 @@ import (
 pub, err := reach.NewPublisher(reach.Config{
     NodeID:   myNodeID,
     Region:   "iad",
-    TenantID: "tenant-abc",
+    TenantID: myTenantID,
     Signer:   edPrivateKey,
-    Ledger:   ledgerAppender,      // ledger.Ledger
-    Whisper:  whisperEngine,        // *whisper.Engine
+    Ledger:   ledgerAppender,          // any ledger.Ledger impl
+    Whisper:  freshnessBus,             // optional — enables reach.freshness gossip
+    Provider: "fly",                    // platform detection hint
     Discoverers: []reach.Discoverer{
-        discoverer.NewStaticConfig(...),
-        discoverer.NewDNSSelfResolve("node.orbtr.io", 41641),
-        discoverer.NewInterfaceEnum(41641),
-        discoverer.NewSTUN("relay.orbtr.io:3478"),
-        discoverer.NewTURN("relay.orbtr.io:3478", tenantPSK, "tenant-abc"),
+        discoverer.NewStatic(staticAddrs),
+        discoverer.NewDNS("node.example.com", 41641),
+        discoverer.NewInterface(41641),
+        discoverer.NewSTUN(discoverer.STUNConfig{
+            ServerAddrs: []string{"stun.example.com:3478"},
+            UDPPort:     41641,
+            // AuthFunc: discoverer.StaticSTUNAuth("user","realm","pw"), // optional — RFC 5389 long-term cred
+        }),
+        discoverer.NewTURN(discoverer.TURNConfig{
+            ServerAddr: "turn.example.com:3478",
+            // Pick one credential scheme:
+            // 1. Static long-term: Username + Password
+            // 2. Standard TURN REST: StandardRESTCredentials(userID, sharedSecret, ttl)
+            // 3. Custom: any CredentialFunc you supply
+            CredentialFunc: discoverer.StandardRESTCredentials(myUserID, sharedSecret, 15*time.Minute),
+        }),
+        discoverer.NewPlatform("fly", 41641),
     },
 })
 if err != nil { return err }
 go pub.Run(ctx)
 ```
 
-The publisher runs its own scheduler, reacts to platform events, and publishes to the ledger — no operator intervention required.
+The publisher runs its own scheduler, reacts to platform events, and publishes to the ledger — no operator intervention required. Everything is configuration-driven; the package has no baked-in server addresses or tenant IDs.
 
 ## Package layout
 
