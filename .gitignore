@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+*.test
+*.out
+/dist/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
