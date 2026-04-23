@@ -114,6 +114,36 @@ type Config struct {
 
 	// ── Metrics ─────────────────────────────────────────────────────
 	Metrics Metrics // optional; use NullMetrics{} to disable
+
+	// ── Delta publishes ─────────────────────────────────────────────
+	// DeltaThreshold is the minimum number of publishes between full
+	// snapshots. Smaller values produce more snapshots (heavier on
+	// bandwidth but self-healing against dropped deltas). 0 = use
+	// default (32 publishes or 5 minutes, whichever first).
+	DeltaThreshold int
+
+	// DeltaMaxAge forces a full snapshot after this wall-clock duration
+	// even when the delta-count hasn't hit DeltaThreshold. Default 5min.
+	DeltaMaxAge time.Duration
+
+	// ── Probing ─────────────────────────────────────────────────────
+	// Prober verifies advertised addresses via peer echo. Supply a
+	// non-nil VerifyTransport to enable — when left nil the publisher
+	// emits addresses with their discoverer-initial Confidence and never
+	// upgrades them to ≥60 via quorum.
+	VerifyTransport VerifyTransport
+
+	// PeerSelector returns a small set of peers the prober asks to verify
+	// each published address. Typical wiring: the consumer's mesh peer
+	// manager selects 2-4 peers in distinct regions. Nil disables probing
+	// even when VerifyTransport is set.
+	PeerSelector func() []PeerInfo
+
+	// RegionRTTTracker aggregates prober RTT samples so the publisher can
+	// compute Address.RegionPriority adaptively. Nil = no adaptive priority.
+	// Publisher constructs a default tracker when the field is nil AND
+	// probing is enabled, so callers don't have to wire one explicitly.
+	RTTTracker *RegionRTTTracker
 }
 
 // defaults fills in any zero-valued fields with sensible production defaults.
@@ -155,6 +185,15 @@ func (c *Config) defaults() {
 	}
 	if c.Metrics == nil {
 		c.Metrics = NullMetrics{}
+	}
+	if c.VerifyTransport != nil && c.RTTTracker == nil {
+		c.RTTTracker = NewRegionRTTTracker(0)
+	}
+	if c.DeltaThreshold == 0 {
+		c.DeltaThreshold = 32
+	}
+	if c.DeltaMaxAge == 0 {
+		c.DeltaMaxAge = 5 * time.Minute
 	}
 }
 

@@ -65,3 +65,8 @@ func PlatformSource() EventSource {
 	}
 	return NewDefaultPoller()
 }
+
+// platformPowerSource returns the Darwin sleep/wake detector.
+func platformPowerSource() EventSource {
+	return NewDarwinPowerSource()
+}
