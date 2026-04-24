@@ -212,6 +212,28 @@ func (p *Publisher) MetadataSnapshot() Metadata {
 	return p.cfg.Metadata.Clone()
 }
 
+// CurrentAddresses returns the last-published address set as "host:port"
+// strings suitable for PEX advertisements. Returns nil when nothing has
+// been published yet (the publisher's initial discovery cycle is
+// pending). Thread-safe; snapshots under the publisher's internal lock
+// so callers get a consistent view that doesn't race with an in-flight
+// publish.
+func (p *Publisher) CurrentAddresses() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.lastAddresses) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(p.lastAddresses))
+	for _, a := range p.lastAddresses {
+		if a.Host == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s:%d", a.Host, a.Port))
+	}
+	return out
+}
+
 // LastDigest returns the digest of the most recently published address set.
 // Useful for freshness-gossip digesting and admin debugging.
 func (p *Publisher) LastDigest() string {
@@ -332,6 +354,29 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 	p.cfg.Metrics.PublishSucceeded(recordBytes)
 	if digest != prevDigest {
 		p.scheduler.noteChange(now)
+	}
+
+	// Fire the post-publish hook outside the lock so handlers can call
+	// back into the publisher (ForcePublish, CurrentAddresses, etc.)
+	// without deadlock. Addresses are snapshotted from the value we just
+	// signed rather than re-reading state so the hook observes exactly
+	// the set that appeared on the wire, even if a concurrent event
+	// triggers another publish immediately after.
+	if p.cfg.AfterPublish != nil {
+		hostPorts := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			if a.Host == "" {
+				continue
+			}
+			hostPorts = append(hostPorts, fmt.Sprintf("%s:%d", a.Host, a.Port))
+		}
+		p.cfg.AfterPublish(PublishInfo{
+			Reason:    reason,
+			Digest:    digest,
+			Addresses: hostPorts,
+			Full:      fullSnapshot,
+			At:        now,
+		})
 	}
 	return nil
 }
