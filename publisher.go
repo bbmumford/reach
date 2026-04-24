@@ -251,7 +251,7 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 	unchanged := digest == p.lastDigest && !p.needsTTLRefresh(now)
 	p.mu.Unlock()
 
-	if unchanged && reason != PublishReasonEpoch && reason != PublishReasonBootstrap {
+	if unchanged && reason != PublishReasonEpoch && reason != PublishReasonBootstrap && reason != PublishReasonPeerRequest {
 		p.cfg.Metrics.PublishSkipped(SkipDigestMatch)
 		return nil
 	}
@@ -512,9 +512,45 @@ func (p *Publisher) applyTTLs(addrs []Address, now time.Time) []Address {
 	return out
 }
 
-// needsTTLRefresh reports whether any address is within one-third of its TTL.
+// recordTTL is the Publisher's record-level TTL — the value it writes into
+// ReachRecord.ExpiresAt and the upper bound the LAD cache respects before
+// evicting a stale record. Also drives the record-level refresh floor in
+// needsTTLRefresh so the publisher re-publishes a full snapshot long
+// before the cache expires the record, even when discoverers produce
+// addresses with zero per-address ExpiresAt (e.g. Fly IMDS static IPs).
+const recordTTL = 10 * time.Minute
+
+// recordRefreshFraction is the fraction of recordTTL after which the
+// publisher forces a re-publish. At 2/3 we republish at ~6.67 min for a
+// 10-min record TTL — one TTL window behind a peer cache that evicts
+// records strictly at ExpiresAt. Leaves headroom for gossip propagation.
+const recordRefreshFraction = 2.0 / 3.0
+
+// needsTTLRefresh reports whether the publisher should emit a fresh full
+// snapshot even when the address-set digest is unchanged. Returns true when
+// EITHER:
+//   - any address is within 1/3 of its per-address TTL, OR
+//   - the last full snapshot is older than recordTTL * recordRefreshFraction.
+//
+// The second condition is the record-level floor. Without it, publishers
+// whose discoverers all return zero-ExpiresAt addresses (static IPs, Fly
+// IMDS) emit exactly one full snapshot at startup and then skip forever
+// on every timer tick — while receivers' caches silently evict the record
+// at the 10-min ExpiresAt. The floor guarantees we refresh long before
+// any peer cache decides the record is stale.
+//
 // Caller holds p.mu.
 func (p *Publisher) needsTTLRefresh(now time.Time) bool {
+	// Record-level floor — covers all-zero per-address ExpiresAt.
+	if !p.lastFullSnapAt.IsZero() {
+		floor := time.Duration(float64(recordTTL) * recordRefreshFraction)
+		if now.Sub(p.lastFullSnapAt) >= floor {
+			return true
+		}
+	}
+	// Per-address checks — trigger earlier if any single address is close
+	// to its own TTL (e.g. STUN addresses often have shorter per-address
+	// TTLs than the record TTL).
 	for _, a := range p.lastAddresses {
 		if a.ExpiresAt.IsZero() {
 			continue
@@ -554,8 +590,10 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 		})
 	}
 
-	// Record-level ExpiresAt = max of per-address ExpiresAt.
-	recordExpiry := now.Add(10 * time.Minute)
+	// Record-level ExpiresAt: floor at recordTTL (matches the record-level
+	// refresh floor in needsTTLRefresh), extended further out by any
+	// per-address ExpiresAt that's already later.
+	recordExpiry := now.Add(recordTTL)
 	for _, a := range addrs {
 		if a.ExpiresAt.After(recordExpiry) {
 			recordExpiry = a.ExpiresAt
@@ -672,16 +710,21 @@ func (p *Publisher) appendToLedger(ctx context.Context, rec ReachRecord) error {
 	return p.cfg.Ledger.Append(ctx, envelope)
 }
 
-// broadcastFreshness emits the digest to peers via the freshness bus.
-// Best-effort; a miss just means a peer catches up on the next gossip round.
+// broadcastFreshness emits the digest announce to peers via the freshness
+// bus. Peers compare against their cache and request a snapshot on mismatch
+// (see FreshnessClient). Best-effort; a miss just means a peer catches up
+// on the next gossip round.
 func (p *Publisher) broadcastFreshness(digest string) {
 	if p.cfg.Whisper == nil || p.cfg.FreshnessInterval == 0 {
 		return
 	}
 	payload := freshnessPayload{
+		Kind:   FreshnessAnnounce,
 		NodeID: p.cfg.NodeID,
 		Digest: digest,
+		From:   p.cfg.NodeID,
 		HLC:    p.cfg.Clock.Last(),
+		Epoch:  p.cfg.Epoch,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -721,11 +764,32 @@ func (p *Publisher) publishTombstone(ctx context.Context, reason string) {
 	p.cfg.Metrics.TombstonePublished(reason)
 }
 
-// freshnessPayload is the wire format of a reach.freshness broadcast.
+// FreshnessKind discriminates the two message types on the freshness topic.
+// Kind 0 is reserved as "unspecified" so unknown kinds decode safely.
+type FreshnessKind uint8
+
+const (
+	// FreshnessAnnounce: a publisher is announcing its current digest.
+	// Receivers compare against their cache and request a snapshot on
+	// mismatch.
+	FreshnessAnnounce FreshnessKind = 1
+
+	// FreshnessRequest: a receiver is asking the subject NodeID to
+	// publish a fresh full snapshot. The subject node's publisher hits
+	// ForcePublish(PublishReasonPeerRequest) on receipt.
+	FreshnessRequest FreshnessKind = 2
+)
+
+// freshnessPayload is the wire format of a reach.freshness message. Covers
+// both announces (Kind=Announce; From==NodeID==publisher) and requests
+// (Kind=Request; NodeID=subject; From=requester).
 type freshnessPayload struct {
-	NodeID string `json:"n"`
-	Digest string `json:"d"`
-	HLC    HLC    `json:"h"`
+	Kind   FreshnessKind `json:"k,omitempty"` // 0 = legacy-treated-as-announce
+	NodeID string        `json:"n"`           // subject (whom the message is about)
+	Digest string        `json:"d,omitempty"` // announce: current; request: requester's known digest
+	From   string        `json:"f,omitempty"` // sender (loop prevention)
+	HLC    HLC           `json:"h"`
+	Epoch  uint64        `json:"e,omitempty"` // sender's process Epoch (stale-announce guard)
 }
 
 func anyPublic(addrs []Address) bool {

@@ -40,6 +40,13 @@ const (
 	PublishReasonEpoch     PublishReason = "epoch"
 	PublishReasonTombstone PublishReason = "tombstone"
 	PublishReasonBootstrap PublishReason = "bootstrap"
+
+	// PublishReasonPeerRequest is used when a peer's FreshnessClient
+	// broadcasts a request asking us to re-publish our current snapshot.
+	// Bypasses the skip-on-digest-unchanged guard so the request is
+	// always honoured; the scheduler's MaxPublishesPerMin leaky bucket
+	// absorbs request storms from multiple peers within one window.
+	PublishReasonPeerRequest PublishReason = "peer_request"
 )
 
 // SkipReason describes why a publish was skipped.

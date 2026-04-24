@@ -17,13 +17,35 @@ type LedgerAppender interface {
 	Append(ctx context.Context, rec lad.Record) error
 }
 
-// FreshnessBus is the gossip surface the Publisher uses to emit the digest
-// of its latest published ReachRecord. Satisfied by a thin wrapper around
-// whisper.Engine.Publish(topic, payload).
+// FreshnessBus is the gossip surface the Publisher uses to emit and receive
+// compact freshness messages (digest announcements + snapshot requests).
+// Satisfied by a thin wrapper around whisper.Engine.
+//
+// The feedback-driven design:
+//   - After each publish, the Publisher announces its current digest.
+//   - Peers compare the announced digest to their cached record's digest.
+//     If they don't match (or the peer has no cached record), the peer
+//     broadcasts a snapshot request naming the NodeID and their known
+//     digest.
+//   - The original publisher sees the request, calls
+//     ForcePublish(PublishReasonPeerRequest), and a fresh full snapshot
+//     flows out via the ledger — satisfying the requesting peer's cache
+//     within one gossip round.
+//
+// This eliminates the polling model ("republish every N minutes") in the
+// steady state: a publisher only emits when a peer actually needs the
+// snapshot. The scheduler's timer + record-TTL floor remain as defensive
+// fallbacks for the case where the FreshnessBus itself is silent.
 type FreshnessBus interface {
-	// PublishDigest broadcasts the digest to all peers. Non-blocking — drops
-	// on backpressure (the publisher will re-emit on the next tick anyway).
+	// PublishDigest broadcasts the payload to all peers. Non-blocking —
+	// drops on backpressure. Used for both announcements and requests.
 	PublishDigest(payload []byte) error
+
+	// SubscribeFreshness delivers freshness payloads received from peers
+	// to handler. Returns an unsubscribe function. Implementations MAY
+	// deliver handler concurrently; handler must be safe for concurrent
+	// invocation.
+	SubscribeFreshness(handler func(payload []byte)) (unsubscribe func())
 }
 
 // Discoverer is the contract implemented by every address source.
