@@ -74,8 +74,9 @@ type Config struct {
 	// package just signs and ships. Typical keys vary per consumer: a
 	// mesh node puts "service_name" + "roles" + "region"; an agent puts
 	// "hostname" + "device_id" + "os"; a third party puts whatever it
-	// needs. See metadata.go for per-consumer conventions and the Member
-	// mirror (WrapMemberMirror) for back-compat projection into MemberRecord.
+	// needs. See metadata.go for per-consumer conventions. The ledger
+	// cache derives lad.MemberRecord views on read from this map, so
+	// consumers don't need a parallel Member publish path.
 	Metadata Metadata
 
 	// OrgID groups nodes whose private addresses should be mutually visible

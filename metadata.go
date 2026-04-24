@@ -28,11 +28,12 @@ import "sort"
 //   Third-party consumer:
 //     {"anything":      "they want"}
 //
-// The Member-mirror (WrapMemberMirror) projects this into lad.MemberRecord.Attrs
-// using a consumer-supplied MirrorConfig that maps metadata keys to attrs keys.
-// By default the mirror passes Metadata through to Attrs verbatim (key-for-key),
-// so consumers who already name their keys like MemberRecord conventions
-// (service_name / region / roles) get the right behavior with zero config.
+// Metadata flows into the ledger cache verbatim: the cache derives
+// lad.MemberRecord views on read (see DirectoryCache.Members) from each
+// reach record's Metadata map, keyed by NodeID. Consumers that name their
+// keys with MemberRecord conventions (service_name / region / roles) get
+// the right behavior for free — no separate Member publish path, no TTL
+// drift between Reach and Member.
 //
 // Metadata is covered by the ReachRecord canonical signature — a peer
 // cannot forge metadata on behalf of another NodeID.
