@@ -2,6 +2,8 @@ github.com/bbmumford/ledger v0.0.3 h1:q8WK5JMO7/70I+PeNxcgdalCCDgFTrGHm84RLAWG4K
 github.com/bbmumford/ledger v0.0.3/go.mod h1:YYubkmwmGfrMGPiJKOhRbcGfE0caj1IWSmJdet2KM1Q=
 github.com/bbmumford/ledger v0.0.5 h1:TgHm/d7l26tG0d7Zsf3oPCQKWeoFm37pMi2vVMn/sGI=
 github.com/bbmumford/ledger v0.0.5/go.mod h1:YYubkmwmGfrMGPiJKOhRbcGfE0caj1IWSmJdet2KM1Q=
+github.com/bbmumford/ledger v0.0.6 h1:dC3dPG8ueHV5TP+GEaBH4EIdw7UbveerueOIAul9S2M=
+github.com/bbmumford/ledger v0.0.6/go.mod h1:YYubkmwmGfrMGPiJKOhRbcGfE0caj1IWSmJdet2KM1Q=
 github.com/bbmumford/whisper v0.0.1 h1:ylpd57Br4I60/1B492Vtt7HKdYFefDajHx69LC3kwMM=
 github.com/bbmumford/whisper v0.0.1/go.mod h1:bAlPbz0u9lFuTFJ6m7Nm3ghX13IlX1P2XJjiNskzF14=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
