@@ -5,6 +5,7 @@ package reach
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
@@ -109,19 +110,32 @@ func (fc *FreshnessClient) SetCooldown(d time.Duration) {
 }
 
 // Start subscribes to the FreshnessBus and kicks off the prune loop.
-// Safe to call multiple times — additional calls no-op.
-func (fc *FreshnessClient) Start(ctx context.Context) {
+// Safe to call multiple times — additional calls no-op and return nil.
+//
+// Returns an error only when the bus fails to register the subscription
+// (indicated by a nil unsubscribe return), which means incoming
+// freshness traffic will never reach this client. Callers should log
+// and continue — the record-TTL-floor keepalive still provides
+// correctness without feedback — rather than abort the publisher.
+func (fc *FreshnessClient) Start(ctx context.Context) error {
 	fc.mu.Lock()
 	if fc.started {
 		fc.mu.Unlock()
-		return
+		return nil
 	}
 	fc.started = true
 	fc.mu.Unlock()
 
 	fc.unsubscribe = fc.bus.SubscribeFreshness(fc.onMessage)
+	if fc.unsubscribe == nil {
+		fc.mu.Lock()
+		fc.started = false
+		fc.mu.Unlock()
+		return errors.New("reach: freshness bus rejected subscription")
+	}
 
 	go fc.runPrune(ctx)
+	return nil
 }
 
 // Stop unsubscribes and waits for the prune loop to exit.

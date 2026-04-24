@@ -176,6 +176,32 @@ type Config struct {
 	// Publisher constructs a default tracker when the field is nil AND
 	// probing is enabled, so callers don't have to wire one explicitly.
 	RTTTracker *RegionRTTTracker
+
+	// AfterPublish is invoked after every successful publish (full
+	// snapshot or delta) with the publisher's new digest and the
+	// currently-published address set. Runs synchronously on the
+	// publisher's Run goroutine, outside the publisher's internal lock —
+	// handlers may call back into the publisher (ForcePublish,
+	// CurrentAddresses) without deadlock but must not block for long.
+	//
+	// Typical use: trigger downstream gossip re-advertisements (e.g. PEX)
+	// that carry the publisher's latest addresses. Firing AFTER discovery
+	// and probing removes the need for arbitrary sleep-then-snapshot
+	// races that would otherwise snapshot an in-flight address set.
+	AfterPublish func(info PublishInfo)
+}
+
+// PublishInfo describes the outcome of a single successful publish,
+// delivered to Config.AfterPublish. Addresses are the post-discovery,
+// post-probe, post-GC set that was signed into the just-published record
+// — formatted as "host:port" strings so consumers can hand them to PEX
+// or any other gossip surface without reconstructing the format.
+type PublishInfo struct {
+	Reason    PublishReason
+	Digest    string
+	Addresses []string
+	Full      bool
+	At        time.Time
 }
 
 // defaults fills in any zero-valued fields with sensible production defaults.
