@@ -64,3 +64,38 @@ func TestVerifyRejectsUnsigned(t *testing.T) {
 		t.Fatalf("expected ErrUnsignedRecord, got %v", err)
 	}
 }
+
+// TestVerifyCoversMetadata locks in that a peer cannot re-marshal a signed
+// record with different metadata and have it still verify.
+func TestVerifyCoversMetadata(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	rec := ReachRecord{
+		NodeID:        "node-a",
+		SchemaVersion: 1,
+		HLC:           HLC{Wall: 1},
+		Metadata: Metadata{
+			"service_name": "devices.orbtr.io",
+			"roles":        "anchor",
+		},
+	}
+	Sign(&rec, priv)
+
+	// Tamper with a metadata value — signature must no longer verify.
+	rec.Metadata["roles"] = "admin"
+	if err := Verify(rec); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("expected ErrSignatureInvalid after metadata tamper, got %v", err)
+	}
+
+	// Also tamper by ADDING a new metadata key.
+	rec2 := ReachRecord{
+		NodeID:        "node-a",
+		SchemaVersion: 1,
+		HLC:           HLC{Wall: 1},
+		Metadata:      Metadata{"service_name": "devices.orbtr.io"},
+	}
+	Sign(&rec2, priv)
+	rec2.Metadata["roles"] = "forged"
+	if err := Verify(rec2); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("expected ErrSignatureInvalid after metadata add, got %v", err)
+	}
+}

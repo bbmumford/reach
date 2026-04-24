@@ -7,55 +7,39 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 
 	lad "github.com/bbmumford/ledger"
 )
 
-// MirrorConfig customises how the member mirror projects a ReachRecord into
-// a legacy MemberRecord. Zero-value config matches the convention used by
-// HSTLES mesh fleet + ORBTR agent (service_name / region / roles attrs,
-// comma-joined roles). Third-party consumers with different conventions can
-// override every aspect.
+// MirrorConfig customises how the member mirror projects a ReachRecord's
+// Metadata into legacy MemberRecord.Attrs. Zero-value config passes Metadata
+// through verbatim (key-for-key). Consumers that need different attr keys
+// supply a KeyMap; consumers with entirely different MemberRecord semantics
+// supply a full Deriver.
 type MirrorConfig struct {
-	// AttrKeyServiceName — attrs key for the ServiceName field.
-	// Default "service_name".
-	AttrKeyServiceName string
+	// KeyMap optionally renames metadata keys when projecting into Attrs.
+	//   Metadata["hostname"] → Attrs["host"]        — KeyMap["hostname"]="host"
+	//   Metadata["secret"]  → (skipped)             — KeyMap["secret"]=""
+	//   Metadata["anything"]→ Attrs["anything"]     — default passthrough
+	// A nil KeyMap means identity (all metadata keys → same attrs keys).
+	KeyMap map[string]string
 
-	// AttrKeyRegion — attrs key for the Region field.
-	// Default "region".
-	AttrKeyRegion string
+	// SkipUnmapped — when true, only keys present in KeyMap are projected.
+	// Use for consumers that want strict filtering instead of passthrough.
+	SkipUnmapped bool
 
-	// AttrKeyRoles — attrs key for the joined role list.
-	// Default "roles".
-	AttrKeyRoles string
+	// PrimaryKey is the metadata key whose presence is required to synthesise
+	// a MemberRecord at all. When empty (default), any non-empty metadata
+	// triggers a Member synthesis. When set (e.g. "service_name"), records
+	// without that key are skipped. Useful for consumers that only want
+	// certain classes of node (named services) in the legacy topic.
+	PrimaryKey string
 
-	// RoleJoiner — separator for joining Roles into a single attrs value.
-	// Default "," (comma).
-	RoleJoiner string
-
-	// Deriver — full override. When non-nil, WrapMemberMirror calls this
-	// instead of the default projection and ignores every other field.
-	// Use when the consumer's MemberRecord convention doesn't fit the
-	// simple attr-key-mapping model (e.g. one MemberRecord per role, or
-	// role metadata encoded as JSON in a single attr value).
+	// Deriver — full override. When non-nil, bypasses the attr-key model
+	// and calls this function for every projection. Use when the consumer's
+	// MemberRecord convention doesn't fit simple KV mapping (e.g. one record
+	// per role, or metadata encoded as JSON in a single attr value).
 	Deriver func(ReachRecord) (lad.MemberRecord, bool)
-}
-
-func (c MirrorConfig) withDefaults() MirrorConfig {
-	if c.AttrKeyServiceName == "" {
-		c.AttrKeyServiceName = "service_name"
-	}
-	if c.AttrKeyRegion == "" {
-		c.AttrKeyRegion = "region"
-	}
-	if c.AttrKeyRoles == "" {
-		c.AttrKeyRoles = "roles"
-	}
-	if c.RoleJoiner == "" {
-		c.RoleJoiner = ","
-	}
-	return c
 }
 
 // deriveWith applies a MirrorConfig to project a ReachRecord into a MemberRecord.
@@ -63,17 +47,32 @@ func deriveWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
 	if cfg.Deriver != nil {
 		return cfg.Deriver(r)
 	}
-	if r.ServiceName == "" {
+	if len(r.Metadata) == 0 {
 		return lad.MemberRecord{}, false
 	}
-	attrs := map[string]string{
-		cfg.AttrKeyServiceName: r.ServiceName,
+	if cfg.PrimaryKey != "" {
+		if _, ok := r.Metadata[cfg.PrimaryKey]; !ok {
+			return lad.MemberRecord{}, false
+		}
 	}
-	if r.Region != "" {
-		attrs[cfg.AttrKeyRegion] = r.Region
+	attrs := make(map[string]string, len(r.Metadata))
+	for k, v := range r.Metadata {
+		if cfg.KeyMap != nil {
+			if newKey, remapped := cfg.KeyMap[k]; remapped {
+				if newKey == "" {
+					continue // explicit skip
+				}
+				attrs[newKey] = v
+				continue
+			}
+			if cfg.SkipUnmapped {
+				continue
+			}
+		}
+		attrs[k] = v
 	}
-	if len(r.Roles) > 0 {
-		attrs[cfg.AttrKeyRoles] = strings.Join(r.Roles, cfg.RoleJoiner)
+	if len(attrs) == 0 {
+		return lad.MemberRecord{}, false
 	}
 	return lad.MemberRecord{
 		NodeID:    r.NodeID,
@@ -82,41 +81,42 @@ func deriveWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
 	}, true
 }
 
-// DeriveMember projects a ReachRecord's identity fields into the legacy
-// MemberRecord shape using the default (HSTLES / ORBTR agent) convention.
-// For custom conventions use DeriveMemberWith + a populated MirrorConfig.
+// DeriveMember projects a ReachRecord's Metadata into the legacy MemberRecord
+// shape with verbatim key passthrough. For custom conventions use
+// DeriveMemberWith + a populated MirrorConfig.
 //
-// Returns (record, true) when ServiceName is non-empty. Returns (_, false)
-// when the reach record carries no identity fields to mirror.
+// Returns (record, true) when Metadata is non-empty. Returns (_, false) when
+// the reach record carries no metadata to mirror.
 func DeriveMember(r ReachRecord) (lad.MemberRecord, bool) {
-	return deriveWith(MirrorConfig{}.withDefaults(), r)
+	return deriveWith(MirrorConfig{}, r)
 }
 
 // DeriveMemberWith is the configurable variant of DeriveMember.
 func DeriveMemberWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
-	return deriveWith(cfg.withDefaults(), r)
+	return deriveWith(cfg, r)
 }
 
 // WrapMemberMirror wraps an inner ledger.Ledger so that every TopicReach
 // Append call ALSO synthesizes and appends a mirrored TopicMember record.
 // The mirror travels on the same gossip path as the Reach record and keeps
-// help.orbtr.io's existing topology grouping code working verbatim, even
-// though the authoritative data lives in the Reach record.
+// topology dashboards that still read TopicMember working unchanged, even
+// though the authoritative data lives in the signed Reach record.
 //
-// Uses the default MirrorConfig (HSTLES / ORBTR agent convention). For
-// custom conventions use WrapMemberMirrorWith.
+// Uses the default MirrorConfig (verbatim passthrough of Metadata → Attrs).
+// For custom conventions use WrapMemberMirrorWith.
 //
 // The mirror is unsigned — consumers that want signed Member data should
-// read ServiceName directly from the Reach record (which IS signed).
+// read Metadata directly from the Reach record (which IS signed).
 func WrapMemberMirror(inner lad.Ledger) lad.Ledger {
-	return &memberMirroredLedger{inner: inner, cfg: MirrorConfig{}.withDefaults()}
+	return &memberMirroredLedger{inner: inner, cfg: MirrorConfig{}}
 }
 
 // WrapMemberMirrorWith is the configurable variant of WrapMemberMirror.
-// Consumers with non-default MemberRecord conventions (alternate attr keys,
-// role joiners, or a fully custom derivation) pass their MirrorConfig here.
+// Consumers with non-default MemberRecord conventions (key renames, strict
+// filtering, PrimaryKey gating, or a full custom derivation) pass their
+// MirrorConfig here.
 func WrapMemberMirrorWith(inner lad.Ledger, cfg MirrorConfig) lad.Ledger {
-	return &memberMirroredLedger{inner: inner, cfg: cfg.withDefaults()}
+	return &memberMirroredLedger{inner: inner, cfg: cfg}
 }
 
 type memberMirroredLedger struct {

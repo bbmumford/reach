@@ -3,20 +3,24 @@
 package reach
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	lad "github.com/bbmumford/ledger"
 )
 
-func TestDeriveMemberDefaultConvention(t *testing.T) {
+// TestDeriveMemberPassthrough verifies the default mirror is identity —
+// every metadata key becomes the same attrs key, unchanged.
+func TestDeriveMemberPassthrough(t *testing.T) {
 	rec := ReachRecord{
-		NodeID:      "n1",
-		ServiceName: "devices.orbtr.io",
-		Region:      "iad",
-		Roles:       []string{"anchor", "platform.tenant"},
-		UpdatedAt:   time.Unix(1000, 0),
+		NodeID: "n1",
+		Metadata: Metadata{
+			"service_name": "devices.orbtr.io",
+			"region":       "iad",
+			"roles":        "anchor,platform.tenant",
+			"fly_machine":  "abc123",
+		},
+		UpdatedAt: time.Unix(1000, 0),
 	}
 	m, ok := DeriveMember(rec)
 	if !ok {
@@ -31,46 +35,121 @@ func TestDeriveMemberDefaultConvention(t *testing.T) {
 	if m.Attrs["roles"] != "anchor,platform.tenant" {
 		t.Errorf("roles: %q", m.Attrs["roles"])
 	}
+	if m.Attrs["fly_machine"] != "abc123" {
+		t.Errorf("fly_machine: %q", m.Attrs["fly_machine"])
+	}
 }
 
-func TestDeriveMemberCustomConvention(t *testing.T) {
+// TestDeriveMemberAgentStyle verifies an agent-shaped metadata set passes
+// through cleanly — no hostname/service_name conflation, each consumer's
+// conventions respected.
+func TestDeriveMemberAgentStyle(t *testing.T) {
 	rec := ReachRecord{
-		NodeID:      "n1",
-		ServiceName: "my-service",
-		Region:      "eu-west-1",
-		Roles:       []string{"tagA", "tagB"},
+		NodeID: "n1",
+		Metadata: Metadata{
+			"hostname":    "alice-laptop",
+			"device_id":   "dev-abc",
+			"os":          "darwin",
+			"app_version": "v0.0.6",
+		},
 	}
-	// Consumer with different attr keys + pipe-joined roles.
+	m, ok := DeriveMember(rec)
+	if !ok {
+		t.Fatal("DeriveMember returned !ok")
+	}
+	if m.Attrs["hostname"] != "alice-laptop" {
+		t.Errorf("hostname: %q", m.Attrs["hostname"])
+	}
+	if m.Attrs["device_id"] != "dev-abc" {
+		t.Errorf("device_id: %q", m.Attrs["device_id"])
+	}
+	if _, leaked := m.Attrs["service_name"]; leaked {
+		t.Error("agent-shape metadata should not produce service_name attr")
+	}
+}
+
+// TestDeriveMemberKeyMap verifies consumers can remap metadata keys.
+func TestDeriveMemberKeyMap(t *testing.T) {
+	rec := ReachRecord{
+		NodeID:   "n1",
+		Metadata: Metadata{"hostname": "alice-laptop", "ssn": "secret"},
+	}
 	cfg := MirrorConfig{
-		AttrKeyServiceName: "svc",
-		AttrKeyRegion:      "rgn",
-		AttrKeyRoles:       "tags",
-		RoleJoiner:         "|",
+		KeyMap: map[string]string{
+			"hostname": "host",
+			"ssn":      "", // explicit skip
+		},
 	}
 	m, ok := DeriveMemberWith(cfg, rec)
 	if !ok {
 		t.Fatal("DeriveMemberWith returned !ok")
 	}
-	if _, wrongKey := m.Attrs["service_name"]; wrongKey {
-		t.Error("default 'service_name' leaked into custom-config output")
+	if m.Attrs["host"] != "alice-laptop" {
+		t.Errorf("host: %q", m.Attrs["host"])
 	}
-	if m.Attrs["svc"] != "my-service" {
-		t.Errorf("svc: %q", m.Attrs["svc"])
+	if _, leaked := m.Attrs["hostname"]; leaked {
+		t.Error("unmapped original key leaked: hostname")
 	}
-	if m.Attrs["rgn"] != "eu-west-1" {
-		t.Errorf("rgn: %q", m.Attrs["rgn"])
-	}
-	if m.Attrs["tags"] != "tagA|tagB" {
-		t.Errorf("tags: %q", m.Attrs["tags"])
+	if _, leaked := m.Attrs["ssn"]; leaked {
+		t.Error("explicitly-skipped key leaked: ssn")
 	}
 }
 
+// TestDeriveMemberSkipUnmapped verifies strict-filter mode excludes all
+// metadata keys not in the KeyMap.
+func TestDeriveMemberSkipUnmapped(t *testing.T) {
+	rec := ReachRecord{
+		NodeID: "n1",
+		Metadata: Metadata{
+			"hostname": "alice-laptop",
+			"keep_me":  "ok",
+			"drop_me":  "out",
+		},
+	}
+	cfg := MirrorConfig{
+		KeyMap:       map[string]string{"hostname": "host", "keep_me": "kept"},
+		SkipUnmapped: true,
+	}
+	m, ok := DeriveMemberWith(cfg, rec)
+	if !ok {
+		t.Fatal("DeriveMemberWith returned !ok")
+	}
+	if m.Attrs["host"] != "alice-laptop" || m.Attrs["kept"] != "ok" {
+		t.Errorf("expected remapped keys, got %v", m.Attrs)
+	}
+	if _, leaked := m.Attrs["drop_me"]; leaked {
+		t.Error("SkipUnmapped=true should exclude unmapped keys")
+	}
+}
+
+// TestDeriveMemberPrimaryKeyGate verifies PrimaryKey filtering.
+func TestDeriveMemberPrimaryKeyGate(t *testing.T) {
+	// Record WITHOUT service_name is skipped.
+	rec := ReachRecord{
+		NodeID:   "n1",
+		Metadata: Metadata{"hostname": "alice-laptop"},
+	}
+	cfg := MirrorConfig{PrimaryKey: "service_name"}
+	if _, ok := DeriveMemberWith(cfg, rec); ok {
+		t.Error("PrimaryKey-gated mirror should skip records without the key")
+	}
+
+	// Record WITH service_name is emitted.
+	rec2 := ReachRecord{
+		NodeID:   "n1",
+		Metadata: Metadata{"service_name": "devices.orbtr.io"},
+	}
+	if _, ok := DeriveMemberWith(cfg, rec2); !ok {
+		t.Error("PrimaryKey-gated mirror should emit when key present")
+	}
+}
+
+// TestDeriveMemberDeriverOverride verifies full override bypasses all mapping.
 func TestDeriveMemberDeriverOverride(t *testing.T) {
-	// Deriver override takes precedence over attr-key config.
-	rec := ReachRecord{NodeID: "n1", ServiceName: "svc"}
+	rec := ReachRecord{NodeID: "n1", Metadata: Metadata{"x": "y"}}
 	called := false
 	cfg := MirrorConfig{
-		AttrKeyServiceName: "service_name",  // should be ignored
+		KeyMap: map[string]string{"x": "should_not_be_used"},
 		Deriver: func(r ReachRecord) (lad.MemberRecord, bool) {
 			called = true
 			return lad.MemberRecord{
@@ -86,35 +165,14 @@ func TestDeriveMemberDeriverOverride(t *testing.T) {
 	if m.Attrs["custom"] != "yes" {
 		t.Errorf("Attrs: %v", m.Attrs)
 	}
-	if _, leaked := m.Attrs["service_name"]; leaked {
-		t.Error("default mapping leaked through deriver override")
+	if _, leaked := m.Attrs["should_not_be_used"]; leaked {
+		t.Error("KeyMap leaked through deriver override")
 	}
 }
 
-func TestDeriveMemberEmptyServiceName(t *testing.T) {
-	// Default convention skips synthesis when ServiceName is empty.
-	_, ok := DeriveMember(ReachRecord{NodeID: "n1", ServiceName: ""})
-	if ok {
-		t.Error("DeriveMember returned ok on empty ServiceName")
+// TestDeriveMemberEmptyMetadata skips synthesis when Metadata is empty.
+func TestDeriveMemberEmptyMetadata(t *testing.T) {
+	if _, ok := DeriveMember(ReachRecord{NodeID: "n1"}); ok {
+		t.Error("DeriveMember returned ok on empty Metadata")
 	}
 }
-
-func TestMirrorConfigDefaultsFillOnly(t *testing.T) {
-	// Partial config: only overrides the keys you set.
-	cfg := MirrorConfig{AttrKeyRoles: "tags"}.withDefaults()
-	if cfg.AttrKeyServiceName != "service_name" {
-		t.Errorf("service_name default not applied: %q", cfg.AttrKeyServiceName)
-	}
-	if cfg.AttrKeyRegion != "region" {
-		t.Errorf("region default not applied: %q", cfg.AttrKeyRegion)
-	}
-	if cfg.AttrKeyRoles != "tags" {
-		t.Errorf("explicit roles override lost: %q", cfg.AttrKeyRoles)
-	}
-	if cfg.RoleJoiner != "," {
-		t.Errorf("default joiner not applied: %q", cfg.RoleJoiner)
-	}
-}
-
-// Sentinel to make strings used.
-var _ = strings.Join
