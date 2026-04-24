@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,14 @@ type Publisher struct {
 	deltasSinceFull    int
 	shuttingDown       bool
 	wrappedDiscoverers []Discoverer // cached backoff-wrapped discoverers
+
+	// refreshJitter is a per-publisher offset drawn once at construction.
+	// Applied to the record-TTL refresh floor so publishers across a
+	// fleet don't align their refresh cycles — a rolling deploy would
+	// otherwise produce a synchronized TTL-expiry wave where every
+	// node's records age out together and receivers' caches trough
+	// before the next refresh wave arrives. Range: 1 ± recordRefreshJitterPct.
+	refreshJitter float64
 }
 
 // AddressChange is emitted by the event bus when something suggests the node's
@@ -60,10 +69,11 @@ func NewPublisher(cfg Config) (*Publisher, error) {
 	cfg.defaults()
 
 	p := &Publisher{
-		cfg:       &cfg,
-		scheduler: newScheduler(&cfg),
-		eventCh:   make(chan AddressChange, 32),
-		forceCh:   make(chan PublishReason, 4),
+		cfg:           &cfg,
+		scheduler:     newScheduler(&cfg),
+		eventCh:       make(chan AddressChange, 32),
+		forceCh:       make(chan PublishReason, 4),
+		refreshJitter: 1.0 + (rand.Float64()*2-1)*recordRefreshJitterPct,
 	}
 	if cfg.VerifyTransport != nil {
 		p.prober = NewProber(cfg.VerifyTransport, ProberConfig{
@@ -520,30 +530,58 @@ func (p *Publisher) applyTTLs(addrs []Address, now time.Time) []Address {
 // addresses with zero per-address ExpiresAt (e.g. Fly IMDS static IPs).
 const recordTTL = 10 * time.Minute
 
-// recordRefreshFraction is the fraction of recordTTL after which the
-// publisher forces a re-publish. At 2/3 we republish at ~6.67 min for a
-// 10-min record TTL — one TTL window behind a peer cache that evicts
-// records strictly at ExpiresAt. Leaves headroom for gossip propagation.
-const recordRefreshFraction = 2.0 / 3.0
+// recordRefreshFraction is the nominal fraction of recordTTL after which
+// the publisher forces a re-publish. Per-publisher jitter (below) offsets
+// this by ±15% so publishers across a fleet don't align their refresh
+// cycles — without jitter, a rolling deploy creates a synchronized
+// TTL-expiry wave where every node's records age out at roughly the
+// same time and the receivers' caches trough together before the next
+// refresh wave arrives.
+const recordRefreshFraction = 0.5
+
+// recordRefreshJitterPct is the ± fraction applied to the per-publisher
+// refresh floor to decorrelate refresh timing across a fleet. Drawn
+// once per Publisher at construction so each publisher's refresh cadence
+// is stable (consistent from one refresh to the next) but different from
+// its peers'.
+const recordRefreshJitterPct = 0.15
+
+// refreshFloor returns the per-publisher jittered interval after which
+// a full-snapshot re-publish is forced regardless of digest stability.
+// Computed once per call from the publisher's stable refreshJitter so
+// the floor doesn't drift mid-lifetime. The stable-jitter design keeps
+// a single publisher's cadence predictable (you can reason about "this
+// node refreshes every ~5 min") while decorrelating across the fleet.
+func (p *Publisher) refreshFloor() time.Duration {
+	j := p.refreshJitter
+	if j <= 0 {
+		// Defensive fallback if a caller constructed a Publisher
+		// without NewPublisher (tests may do this) — collapse to
+		// the un-jittered nominal floor rather than never refreshing.
+		j = 1.0
+	}
+	return time.Duration(float64(recordTTL) * recordRefreshFraction * j)
+}
 
 // needsTTLRefresh reports whether the publisher should emit a fresh full
 // snapshot even when the address-set digest is unchanged. Returns true when
 // EITHER:
 //   - any address is within 1/3 of its per-address TTL, OR
-//   - the last full snapshot is older than recordTTL * recordRefreshFraction.
+//   - the last full snapshot is older than the per-publisher jittered
+//     refresh floor.
 //
-// The second condition is the record-level floor. Without it, publishers
-// whose discoverers all return zero-ExpiresAt addresses (static IPs, Fly
-// IMDS) emit exactly one full snapshot at startup and then skip forever
-// on every timer tick — while receivers' caches silently evict the record
-// at the 10-min ExpiresAt. The floor guarantees we refresh long before
-// any peer cache decides the record is stale.
+// The second condition covers publishers whose discoverers all return
+// zero-ExpiresAt addresses (static IPs, Fly IMDS) — without it they emit
+// exactly one full snapshot at startup and then skip forever while
+// receivers' caches silently evict at the 10-min ExpiresAt. The jitter
+// prevents synchronized refresh waves across a fleet deployed within the
+// same rolling-upgrade window.
 //
 // Caller holds p.mu.
 func (p *Publisher) needsTTLRefresh(now time.Time) bool {
 	// Record-level floor — covers all-zero per-address ExpiresAt.
 	if !p.lastFullSnapAt.IsZero() {
-		floor := time.Duration(float64(recordTTL) * recordRefreshFraction)
+		floor := p.refreshFloor()
 		if now.Sub(p.lastFullSnapAt) >= floor {
 			return true
 		}
