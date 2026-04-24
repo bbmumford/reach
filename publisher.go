@@ -248,10 +248,29 @@ func (p *Publisher) publishOnce(ctx context.Context, reason PublishReason) error
 	digest := Digest(addrs)
 
 	p.mu.Lock()
+	sinceLastPublish := now.Sub(p.lastPublishedAt)
 	unchanged := digest == p.lastDigest && !p.needsTTLRefresh(now)
 	p.mu.Unlock()
 
-	if unchanged && reason != PublishReasonEpoch && reason != PublishReasonBootstrap {
+	// Keep-alive refresh: even when the address digest is identical, peers
+	// still need a periodic re-publish to keep MemberRecords, RTT/confidence
+	// entries, and latency records alive in their caches. Without this, a
+	// node whose addresses never change goes silent after its initial
+	// publish, and downstream TTL-based eviction drops its Member entry,
+	// which in turn takes its service-name off topology maps.
+	//
+	// Force a publish when it has been longer than the keep-alive window
+	// since the last one, regardless of digest. Defaults to half the base
+	// publish interval so there are always two publishes per eviction
+	// window for downstream consumers.
+	keepAliveWindow := p.cfg.BaseInterval / 2
+	if keepAliveWindow <= 0 {
+		keepAliveWindow = 2 * time.Minute
+	}
+	staleForKeepAlive := !p.lastPublishedAt.IsZero() && sinceLastPublish >= keepAliveWindow
+
+	if unchanged && !staleForKeepAlive &&
+		reason != PublishReasonEpoch && reason != PublishReasonBootstrap {
 		p.cfg.Metrics.PublishSkipped(SkipDigestMatch)
 		return nil
 	}
