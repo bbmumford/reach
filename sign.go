@@ -79,6 +79,15 @@ func canonicalSignatureBytes(rec *ReachRecord) []byte {
 	// Region
 	buf = appendLenPrefixed(buf, []byte(rec.Region))
 
+	// Identity (ServiceName + Roles) — folded in so a peer can't forge
+	// MemberRecord attrs for this node. Roles sorted for determinism.
+	buf = appendLenPrefixed(buf, []byte(rec.ServiceName))
+	rs := append([]string(nil), rec.Roles...)
+	sort.Strings(rs)
+	for _, r := range rs {
+		buf = appendLenPrefixed(buf, []byte(r))
+	}
+
 	// AddressSet digest (stable hash of enriched addresses)
 	buf = appendLenPrefixed(buf, []byte(Digest(rec.AddressSet)))
 

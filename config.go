@@ -69,6 +69,16 @@ type Config struct {
 	TenantID string
 	Region   string
 
+	// ServiceName identifies this node as a member of a named service
+	// (e.g. "devices.orbtr.io", "relay.orbtr.io"). Previously lived in a
+	// parallel MemberRecord; now folded into the signed ReachRecord so
+	// topology consumers see it without a second round-trip.
+	ServiceName string
+
+	// Roles attaches capability tags to this node (e.g. "anchor",
+	// "platform.tenant", "device.agent"). Same lifecycle as ServiceName.
+	Roles []string
+
 	// OrgID groups nodes whose private addresses should be mutually visible
 	// but hidden from non-org peers. May be empty for single-tenant deployments.
 	OrgID string
