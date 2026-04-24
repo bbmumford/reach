@@ -43,6 +43,15 @@ type MirrorConfig struct {
 }
 
 // deriveWith applies a MirrorConfig to project a ReachRecord into a MemberRecord.
+//
+// ExpiresAt on the synthesized MemberRecord is inherited from ReachRecord.
+// This ties the Member's cache lifetime directly to the Reach record's —
+// when a fresh Reach publish arrives, the mirror synthesizes a Member with
+// the new, later ExpiresAt; the cache's TTL eviction sees the refresh and
+// keeps the Member alive. Without this, the Member inherited a zero
+// ExpiresAt and was evicted on whatever default policy the cache applied,
+// which is often shorter than the Reach TTL and causes Members to decay
+// independently of the authoritative Reach state.
 func deriveWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
 	if cfg.Deriver != nil {
 		return cfg.Deriver(r)
@@ -77,6 +86,7 @@ func deriveWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
 	return lad.MemberRecord{
 		NodeID:    r.NodeID,
 		CreatedAt: r.UpdatedAt,
+		ExpiresAt: r.ExpiresAt,
 		Attrs:     attrs,
 	}, true
 }
@@ -161,6 +171,10 @@ func (m *memberMirroredLedger) Append(ctx context.Context, rec lad.Record) error
 		Timestamp:    rec.Timestamp,
 		LamportClock: rec.LamportClock,
 		HLCTimestamp: rec.HLCTimestamp,
+		// Inherit ExpiresAt from the Reach record's envelope so the cache
+		// TTL eviction treats Member and Reach as a coupled pair. A fresh
+		// Reach publish automatically refreshes its paired Member's TTL.
+		ExpiresAt:    rec.ExpiresAt,
 	}
 	// Best-effort — if the mirror append fails, the Reach record is still
 	// live and authoritative. Don't surface the mirror error to the caller.
