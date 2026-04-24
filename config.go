@@ -69,15 +69,14 @@ type Config struct {
 	TenantID string
 	Region   string
 
-	// ServiceName identifies this node as a member of a named service
-	// (e.g. "devices.orbtr.io", "relay.orbtr.io"). Previously lived in a
-	// parallel MemberRecord; now folded into the signed ReachRecord so
-	// topology consumers see it without a second round-trip.
-	ServiceName string
-
-	// Roles attaches capability tags to this node (e.g. "anchor",
-	// "platform.tenant", "device.agent"). Same lifecycle as ServiceName.
-	Roles []string
+	// Metadata is the consumer-defined identity blob carried in every
+	// signed ReachRecord. Consumers decide what goes in here — the reach
+	// package just signs and ships. Typical keys vary per consumer: a
+	// mesh node puts "service_name" + "roles" + "region"; an agent puts
+	// "hostname" + "device_id" + "os"; a third party puts whatever it
+	// needs. See metadata.go for per-consumer conventions and the Member
+	// mirror (WrapMemberMirror) for back-compat projection into MemberRecord.
+	Metadata Metadata
 
 	// OrgID groups nodes whose private addresses should be mutually visible
 	// but hidden from non-org peers. May be empty for single-tenant deployments.

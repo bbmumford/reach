@@ -166,23 +166,40 @@ func (p *Publisher) NotifyRoleChange() {
 	p.ForcePublish(PublishReasonEvent)
 }
 
-// SetRoles atomically updates the publisher's role set AND triggers an
-// immediate signed re-publish. Use this instead of mutating Config.Roles
-// directly — direct mutation races the build goroutine.
-func (p *Publisher) SetRoles(roles []string) {
+// SetMetadata atomically replaces the publisher's Metadata map and triggers
+// an immediate signed re-publish. The input is cloned so the caller can
+// mutate safely after the call returns.
+func (p *Publisher) SetMetadata(meta Metadata) {
 	p.mu.Lock()
-	p.cfg.Roles = append([]string(nil), roles...)
+	p.cfg.Metadata = meta.Clone()
 	p.mu.Unlock()
 	p.ForcePublish(PublishReasonEvent)
 }
 
-// SetServiceName atomically updates ServiceName and triggers an immediate
-// signed re-publish. Rare — service-name is usually fixed at process start.
-func (p *Publisher) SetServiceName(name string) {
+// SetMetadataValue atomically updates a single metadata key and triggers an
+// immediate signed re-publish. Useful for role-promotion paths that want to
+// flip one attribute without re-supplying the whole map.
+//
+// Passing an empty value removes the key.
+func (p *Publisher) SetMetadataValue(key, value string) {
 	p.mu.Lock()
-	p.cfg.ServiceName = name
+	if p.cfg.Metadata == nil {
+		p.cfg.Metadata = make(Metadata)
+	}
+	if value == "" {
+		delete(p.cfg.Metadata, key)
+	} else {
+		p.cfg.Metadata[key] = value
+	}
 	p.mu.Unlock()
 	p.ForcePublish(PublishReasonEvent)
+}
+
+// Metadata returns a snapshot of the current metadata map — safe to mutate.
+func (p *Publisher) MetadataSnapshot() Metadata {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cfg.Metadata.Clone()
 }
 
 // LastDigest returns the digest of the most recently published address set.
@@ -558,8 +575,7 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 		Epoch:         p.cfg.Epoch,
 		AddressSet:    append([]Address(nil), publicSet...),
 		ICECandidates: BuildICECandidates(publicSet),
-		ServiceName:   p.cfg.ServiceName,
-		Roles:         append([]string(nil), p.cfg.Roles...),
+		Metadata:      p.cfg.Metadata.Clone(),
 	}
 
 	// Seal private addresses for same-org peers if we have a key.
