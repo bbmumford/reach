@@ -47,6 +47,15 @@ type ReachRecord struct {
 	PubKey        []byte            `json:"pk,omitempty"`
 	Signature     []byte            `json:"sig,omitempty"`
 
+	// ── Identity fields (was MemberRecord) ─────────────────────────
+	// Folded into ReachRecord so the same signed envelope carries both
+	// "how to reach me" and "who I am". Lets consumers drop the separate
+	// MemberRecord publish path entirely — one publish, one signature,
+	// one HLC, one cache-presence check. Legacy consumers of TopicMember
+	// can derive the MemberRecord view via DeriveMember(r).
+	ServiceName string   `json:"svc,omitempty"` // e.g. "devices.orbtr.io"
+	Roles       []string `json:"roles,omitempty"`
+
 	// ── ICE candidates (RFC 8445) ───────────────────────────────────
 	// Populated when at least one ICE-capable discoverer ran. Empty on
 	// nodes that only emit flat ReachAddress entries.

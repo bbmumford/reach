@@ -166,6 +166,25 @@ func (p *Publisher) NotifyRoleChange() {
 	p.ForcePublish(PublishReasonEvent)
 }
 
+// SetRoles atomically updates the publisher's role set AND triggers an
+// immediate signed re-publish. Use this instead of mutating Config.Roles
+// directly — direct mutation races the build goroutine.
+func (p *Publisher) SetRoles(roles []string) {
+	p.mu.Lock()
+	p.cfg.Roles = append([]string(nil), roles...)
+	p.mu.Unlock()
+	p.ForcePublish(PublishReasonEvent)
+}
+
+// SetServiceName atomically updates ServiceName and triggers an immediate
+// signed re-publish. Rare — service-name is usually fixed at process start.
+func (p *Publisher) SetServiceName(name string) {
+	p.mu.Lock()
+	p.cfg.ServiceName = name
+	p.mu.Unlock()
+	p.ForcePublish(PublishReasonEvent)
+}
+
 // LastDigest returns the digest of the most recently published address set.
 // Useful for freshness-gossip digesting and admin debugging.
 func (p *Publisher) LastDigest() string {
@@ -539,6 +558,8 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 		Epoch:         p.cfg.Epoch,
 		AddressSet:    append([]Address(nil), publicSet...),
 		ICECandidates: BuildICECandidates(publicSet),
+		ServiceName:   p.cfg.ServiceName,
+		Roles:         append([]string(nil), p.cfg.Roles...),
 	}
 
 	// Seal private addresses for same-org peers if we have a key.
