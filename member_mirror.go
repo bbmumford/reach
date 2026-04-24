@@ -12,25 +12,68 @@ import (
 	lad "github.com/bbmumford/ledger"
 )
 
-// DeriveMember projects a ReachRecord's identity fields into the legacy
-// MemberRecord shape. Consumers that still read TopicMember for service
-// grouping (e.g. topology dashboards) call this to get the materialized
-// view without needing a second publish.
-//
-// Returns (record, true) when ServiceName is non-empty. Returns (_, false)
-// when the reach record carries no identity fields to mirror.
-func DeriveMember(r ReachRecord) (lad.MemberRecord, bool) {
+// MirrorConfig customises how the member mirror projects a ReachRecord into
+// a legacy MemberRecord. Zero-value config matches the convention used by
+// HSTLES mesh fleet + ORBTR agent (service_name / region / roles attrs,
+// comma-joined roles). Third-party consumers with different conventions can
+// override every aspect.
+type MirrorConfig struct {
+	// AttrKeyServiceName — attrs key for the ServiceName field.
+	// Default "service_name".
+	AttrKeyServiceName string
+
+	// AttrKeyRegion — attrs key for the Region field.
+	// Default "region".
+	AttrKeyRegion string
+
+	// AttrKeyRoles — attrs key for the joined role list.
+	// Default "roles".
+	AttrKeyRoles string
+
+	// RoleJoiner — separator for joining Roles into a single attrs value.
+	// Default "," (comma).
+	RoleJoiner string
+
+	// Deriver — full override. When non-nil, WrapMemberMirror calls this
+	// instead of the default projection and ignores every other field.
+	// Use when the consumer's MemberRecord convention doesn't fit the
+	// simple attr-key-mapping model (e.g. one MemberRecord per role, or
+	// role metadata encoded as JSON in a single attr value).
+	Deriver func(ReachRecord) (lad.MemberRecord, bool)
+}
+
+func (c MirrorConfig) withDefaults() MirrorConfig {
+	if c.AttrKeyServiceName == "" {
+		c.AttrKeyServiceName = "service_name"
+	}
+	if c.AttrKeyRegion == "" {
+		c.AttrKeyRegion = "region"
+	}
+	if c.AttrKeyRoles == "" {
+		c.AttrKeyRoles = "roles"
+	}
+	if c.RoleJoiner == "" {
+		c.RoleJoiner = ","
+	}
+	return c
+}
+
+// deriveWith applies a MirrorConfig to project a ReachRecord into a MemberRecord.
+func deriveWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
+	if cfg.Deriver != nil {
+		return cfg.Deriver(r)
+	}
 	if r.ServiceName == "" {
 		return lad.MemberRecord{}, false
 	}
 	attrs := map[string]string{
-		"service_name": r.ServiceName,
+		cfg.AttrKeyServiceName: r.ServiceName,
 	}
 	if r.Region != "" {
-		attrs["region"] = r.Region
+		attrs[cfg.AttrKeyRegion] = r.Region
 	}
 	if len(r.Roles) > 0 {
-		attrs["roles"] = strings.Join(r.Roles, ",")
+		attrs[cfg.AttrKeyRoles] = strings.Join(r.Roles, cfg.RoleJoiner)
 	}
 	return lad.MemberRecord{
 		NodeID:    r.NodeID,
@@ -39,20 +82,46 @@ func DeriveMember(r ReachRecord) (lad.MemberRecord, bool) {
 	}, true
 }
 
+// DeriveMember projects a ReachRecord's identity fields into the legacy
+// MemberRecord shape using the default (HSTLES / ORBTR agent) convention.
+// For custom conventions use DeriveMemberWith + a populated MirrorConfig.
+//
+// Returns (record, true) when ServiceName is non-empty. Returns (_, false)
+// when the reach record carries no identity fields to mirror.
+func DeriveMember(r ReachRecord) (lad.MemberRecord, bool) {
+	return deriveWith(MirrorConfig{}.withDefaults(), r)
+}
+
+// DeriveMemberWith is the configurable variant of DeriveMember.
+func DeriveMemberWith(cfg MirrorConfig, r ReachRecord) (lad.MemberRecord, bool) {
+	return deriveWith(cfg.withDefaults(), r)
+}
+
 // WrapMemberMirror wraps an inner ledger.Ledger so that every TopicReach
 // Append call ALSO synthesizes and appends a mirrored TopicMember record.
 // The mirror travels on the same gossip path as the Reach record and keeps
 // help.orbtr.io's existing topology grouping code working verbatim, even
 // though the authoritative data lives in the Reach record.
 //
+// Uses the default MirrorConfig (HSTLES / ORBTR agent convention). For
+// custom conventions use WrapMemberMirrorWith.
+//
 // The mirror is unsigned — consumers that want signed Member data should
 // read ServiceName directly from the Reach record (which IS signed).
 func WrapMemberMirror(inner lad.Ledger) lad.Ledger {
-	return &memberMirroredLedger{inner: inner}
+	return &memberMirroredLedger{inner: inner, cfg: MirrorConfig{}.withDefaults()}
+}
+
+// WrapMemberMirrorWith is the configurable variant of WrapMemberMirror.
+// Consumers with non-default MemberRecord conventions (alternate attr keys,
+// role joiners, or a fully custom derivation) pass their MirrorConfig here.
+func WrapMemberMirrorWith(inner lad.Ledger, cfg MirrorConfig) lad.Ledger {
+	return &memberMirroredLedger{inner: inner, cfg: cfg.withDefaults()}
 }
 
 type memberMirroredLedger struct {
 	inner lad.Ledger
+	cfg   MirrorConfig
 }
 
 func (m *memberMirroredLedger) Head(ctx context.Context) (lad.CausalWatermark, error) {
@@ -76,7 +145,7 @@ func (m *memberMirroredLedger) Append(ctx context.Context, rec lad.Record) error
 	if IsDelta(reachRec.SchemaVersion) {
 		return nil
 	}
-	member, ok := DeriveMember(reachRec)
+	member, ok := deriveWith(m.cfg, reachRec)
 	if !ok {
 		return nil
 	}
@@ -115,7 +184,7 @@ func (m *memberMirroredLedger) BatchAppend(ctx context.Context, records []lad.Re
 		if IsDelta(reachRec.SchemaVersion) {
 			continue
 		}
-		member, ok := DeriveMember(reachRec)
+		member, ok := deriveWith(m.cfg, reachRec)
 		if !ok {
 			continue
 		}
