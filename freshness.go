@@ -191,6 +191,57 @@ func (fc *FreshnessClient) onMessage(payload []byte) {
 	}
 }
 
+// RequestSubject broadcasts a FreshnessRequest for the named subject
+// without waiting for an inbound FreshnessAnnounce to trigger the
+// tracker's mismatch path. Designed for callers (e.g. the connection
+// manager) that learn of stale or missing reach records out-of-band —
+// for instance, when a peer is connected to us but no ReachRecord for
+// it appears in the local cache, the announce-driven feedback loop
+// has clearly failed for that peer-pair and we want to actively pull
+// a fresh snapshot rather than keep waiting for an announce that may
+// never arrive.
+//
+// The same per-subject cooldown that gates onMismatch-driven requests
+// applies here, so repeated calls (or simultaneous calls from the
+// announce path and a manual probe) coalesce into a single outbound
+// request inside the cooldown window. Returns true when the request
+// was actually emitted, false when suppressed by cooldown or when the
+// client was constructed without a cache (the request still emits in
+// that mode — we just can't compute the local digest to include).
+//
+// Safe to call before Start and after Stop; in those cases the bus
+// publish is a no-op (or returns an error which we discard, matching
+// the existing onMismatch behaviour).
+func (fc *FreshnessClient) RequestSubject(subjectNodeID string) bool {
+	if subjectNodeID == "" || subjectNodeID == fc.nodeID {
+		return false // can't request own record from self
+	}
+	if !fc.requestAllowed(subjectNodeID) {
+		return false
+	}
+	cachedDigest := ""
+	if fc.cache != nil {
+		if body := fc.cache.LookupReachBody(subjectNodeID); body != nil {
+			if d, ok := digestFromReachBody(body); ok {
+				cachedDigest = d
+			}
+		}
+	}
+	req := freshnessPayload{
+		Kind:   FreshnessRequest,
+		NodeID: subjectNodeID,
+		Digest: cachedDigest,
+		From:   fc.nodeID,
+		HLC:    fc.clock.Last(),
+	}
+	raw, err := json.Marshal(&req)
+	if err != nil {
+		return false
+	}
+	_ = fc.bus.PublishDigest(raw)
+	return true
+}
+
 // onMismatch fires when the tracker sees a digest differing from the
 // previous observation (or the first-ever observation for this peer).
 // If the cache also disagrees with the announced digest, broadcast a
