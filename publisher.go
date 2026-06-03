@@ -755,9 +755,14 @@ func (p *Publisher) appendDeltaToLedger(ctx context.Context, drec DeltaRecord) e
 		LamportClock: uint64(drec.HLC.Wall),
 		HLCTimestamp: uint64(drec.HLC.Wall),
 		ExpiresAt:    drec.ExpiresAt,
-		AuthorPubKey: drec.PubKey,
-		Signature:    drec.Signature,
 	}
+	// The inner ReachRecord.Signature signs reach.signableBytes, NOT the
+	// lad.signatureContent envelope. Stuffing it into envelope.Signature
+	// fails VerifyRecord at the signedTopicACL on every peer. Leave the
+	// envelope's AuthorPubKey/Signature empty so the upstream signing
+	// ledger wrapper stamps a fresh envelope-level signature with the
+	// local node's identity key. Inner reach.Signature stays inside the
+	// body for downstream reach.Verify on the typed payload.
 	return p.cfg.Ledger.Append(ctx, envelope)
 }
 
@@ -782,9 +787,15 @@ func (p *Publisher) appendToLedger(ctx context.Context, rec ReachRecord) error {
 		LamportClock: uint64(rec.HLC.Wall),
 		HLCTimestamp: uint64(rec.HLC.Wall),
 		ExpiresAt:    rec.ExpiresAt,
-		AuthorPubKey: rec.PubKey,
-		Signature:    rec.Signature,
 	}
+	// Envelope-level AuthorPubKey/Signature are intentionally left empty.
+	// The inner ReachRecord.Signature signs reach.signableBytes — a
+	// different canonical layout than lad.signatureContent — and copying
+	// it into envelope.Signature failed VerifyRecord on every peer. The
+	// signing-ledger wrapper installed at the runtime stamps a valid
+	// envelope signature with the local node's identity key. Inner
+	// reach.Signature still travels in the body for downstream
+	// reach.Verify on the typed payload.
 	if rec.Tombstone != nil {
 		envelope.Tombstone = true
 		envelope.TombstoneReason = rec.Tombstone.Reason
