@@ -18,7 +18,7 @@ type lastGood struct {
 	Addresses  []Address   `json:"addresses"`
 	Record     ReachRecord `json:"record"`
 	Epoch      uint64      `json:"epoch"`
-	WrittenAt  string      `json:"written_at"`
+	WrittenAt  string      `json:"writtenAt"`
 }
 
 // saveLastGood writes the most recent published record to disk.

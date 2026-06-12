@@ -25,25 +25,25 @@ const SchemaVersion uint16 = 1
 type ReachRecord struct {
 	// ── Ledger-compatible base ──────────────────────────────────────
 	TenantID      string             `json:"tenant,omitempty"`
-	NodeID        string             `json:"node_id"`
+	NodeID        string             `json:"nodeId"`
 	Seq           uint64             `json:"seq"`
 	Addresses     []lad.ReachAddress `json:"addrs"`
 	Region        string             `json:"region"`
-	NATType       string             `json:"nat_type,omitempty"`
-	NATObserved   string             `json:"nat_observed,omitempty"`
-	LatencyMillis int64              `json:"latency_ms,omitempty"`
+	NATType       string             `json:"natType,omitempty"`
+	NATObserved   string             `json:"natObserved,omitempty"`
+	LatencyMillis int64              `json:"latencyMs,omitempty"`
 	Availability  float64            `json:"availability,omitempty"`
-	LoadFactor    float64            `json:"load_factor,omitempty"`
-	ExpiresAt     time.Time          `json:"expires_at"`
+	LoadFactor    float64            `json:"loadFactor,omitempty"`
+	ExpiresAt     time.Time          `json:"expiresAt"`
 	UpdatedAt     time.Time          `json:"ts"`
 
 	// ── Reach v1 additions ──────────────────────────────────────────
 	SchemaVersion uint16            `json:"v,omitempty"`
 	HLC           HLC               `json:"hlc,omitempty"`
 	Epoch         uint64            `json:"epoch,omitempty"`
-	AddressSet    []Address         `json:"addrs_v1,omitempty"`
+	AddressSet    []Address         `json:"addrsV1,omitempty"`
 	Tombstone     *TombstoneInfo    `json:"tombstone,omitempty"`
-	EncryptedOrg  *EncryptedSection `json:"enc_org,omitempty"`
+	EncryptedOrg  *EncryptedSection `json:"encOrg,omitempty"`
 	PubKey        []byte            `json:"pk,omitempty"`
 	Signature     []byte            `json:"sig,omitempty"`
 
