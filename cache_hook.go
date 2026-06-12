@@ -88,7 +88,7 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 	// Two body shapes: ReachRecord and DeltaRecord — discriminate via
 	// SchemaVersion's high bit.
 	var probe struct {
-		NodeID        string `json:"node_id"`
+		NodeID        string `json:"nodeId"`
 		SchemaVersion uint16 `json:"v"`
 		HLC           HLC    `json:"hlc"`
 		Epoch         uint64 `json:"epoch"`

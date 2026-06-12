@@ -33,7 +33,7 @@ type DeltaEntry struct {
 // ReachRecord. The SchemaVersion field is the discriminator — SchemaVersion
 // has bit 15 set (0x8000 | baseVersion) to flag "this is a delta".
 type DeltaRecord struct {
-	NodeID        string        `json:"node_id"`
+	NodeID        string        `json:"nodeId"`
 	TenantID      string        `json:"tenant,omitempty"`
 	SchemaVersion uint16        `json:"v"`
 	HLC           HLC           `json:"hlc"`
