@@ -25,7 +25,7 @@ type Publisher struct {
 	cfg *Config
 
 	scheduler *scheduler
-	prober    *Prober // nil when VerifyTransport not configured
+	prober    *Prober            // nil when VerifyTransport not configured
 	eventCh   chan AddressChange // external events (netlink, role change, etc.)
 	forceCh   chan PublishReason // internal "publish now" requests
 
@@ -51,7 +51,7 @@ type Publisher struct {
 // AddressChange is emitted by the event bus when something suggests the node's
 // reachability has changed (interface up/down, DHCP renew, sleep/wake, etc.).
 type AddressChange struct {
-	Source string    // human description (e.g. "netlink:eth0:down")
+	Source string // human description (e.g. "netlink:eth0:down")
 	At     time.Time
 }
 
@@ -684,7 +684,7 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 	}
 
 	rec := ReachRecord{
-		TenantID:      p.cfg.TenantID,
+		Partition:     p.cfg.TenantID,
 		NodeID:        p.cfg.NodeID,
 		Seq:           uint64(hlc.Wall),
 		Addresses:     flat,
@@ -724,7 +724,7 @@ func (p *Publisher) buildDelta(ops []DeltaEntry, baseDigest string, now time.Tim
 	hlc := p.cfg.Clock.Tick()
 	drec := DeltaRecord{
 		NodeID:        p.cfg.NodeID,
-		TenantID:      p.cfg.TenantID,
+		Partition:     p.cfg.TenantID,
 		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
 		HLC:           hlc,
 		Epoch:         p.cfg.Epoch,
@@ -748,7 +748,7 @@ func (p *Publisher) appendDeltaToLedger(ctx context.Context, drec DeltaRecord) e
 	}
 	envelope := lad.Record{
 		Topic:        lad.TopicReach,
-		TenantID:     drec.TenantID,
+		Partition:    drec.Partition,
 		NodeID:       drec.NodeID,
 		Body:         body,
 		Timestamp:    drec.UpdatedAt,
@@ -780,7 +780,7 @@ func (p *Publisher) appendToLedger(ctx context.Context, rec ReachRecord) error {
 	}
 	envelope := lad.Record{
 		Topic:        lad.TopicReach,
-		TenantID:     rec.TenantID,
+		Partition:    rec.Partition,
 		NodeID:       rec.NodeID,
 		Body:         body,
 		Timestamp:    rec.UpdatedAt,
@@ -836,7 +836,7 @@ func (p *Publisher) publishTombstone(ctx context.Context, reason string) {
 	hlc := p.cfg.Clock.Tick()
 	now := time.Now().UTC()
 	rec := ReachRecord{
-		TenantID:      p.cfg.TenantID,
+		Partition:     p.cfg.TenantID,
 		NodeID:        p.cfg.NodeID,
 		Seq:           uint64(hlc.Wall),
 		Region:        p.cfg.Region,
