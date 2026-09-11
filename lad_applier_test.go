@@ -26,7 +26,7 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 		{Host: "2.2.2.2", Port: 9000, Proto: "udp", Scope: ScopePublic, Source: SrcSTUN, ExpiresAt: time.Now().Add(time.Hour)},
 	}
 	base := ReachRecord{
-		TenantID:      "",
+		Partition:     "",
 		NodeID:        "vl1_alice",
 		Region:        "iad",
 		Addresses:     []lad.ReachAddress{{Host: "1.1.1.1", Port: 9000, Proto: "udp", Scope: "public"}, {Host: "2.2.2.2", Port: 9000, Proto: "udp", Scope: "public"}},
@@ -116,5 +116,40 @@ func TestLadCacheDeltaApplier_BaseMismatch(t *testing.T) {
 	_, err := LadCacheDeltaApplier(baseBody, deltaBody)
 	if err == nil {
 		t.Fatalf("expected base-mismatch error, got nil")
+	}
+}
+
+// TestReachBodyPartitionSurvivesTheLedgerDecoder pins the JSON contract between
+// the body reach publishes and ledger's decoder: the ledger cache files a reach
+// record under the partition ledger.UnmarshalReach decodes from the body, so a
+// key mismatch would file every agent's record under "" and its lookups by
+// partition would miss.
+func TestReachBodyPartitionSurvivesTheLedgerDecoder(t *testing.T) {
+	body, err := json.Marshal(ReachRecord{
+		Partition:     "partition-a",
+		NodeID:        "vl1_node",
+		SchemaVersion: SchemaVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := lad.UnmarshalReach(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Partition != "partition-a" {
+		t.Fatalf("ledger decoded partition %q from %s, want partition-a", got.Partition, body)
+	}
+
+	delta, err := json.Marshal(DeltaRecord{NodeID: "vl1_node", Partition: "partition-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(delta, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if string(keys["partition"]) != `"partition-a"` {
+		t.Fatalf("delta body %s does not carry the partition under the key ledger reads", delta)
 	}
 }

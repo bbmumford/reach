@@ -19,8 +19,8 @@ const (
 
 // DeltaEntry describes one change to an address set.
 type DeltaEntry struct {
-	Op      DeltaOp `json:"op"`
-	AddrKey string  `json:"k"`      // Address.Key() of the target
+	Op      DeltaOp  `json:"op"`
+	AddrKey string   `json:"k"`           // Address.Key() of the target
 	Addr    *Address `json:"a,omitempty"` // full Address for add/update; nil for remove
 }
 
@@ -33,17 +33,17 @@ type DeltaEntry struct {
 // ReachRecord. The SchemaVersion field is the discriminator — SchemaVersion
 // has bit 15 set (0x8000 | baseVersion) to flag "this is a delta".
 type DeltaRecord struct {
-	NodeID        string        `json:"nodeId"`
-	TenantID      string        `json:"tenant,omitempty"`
-	SchemaVersion uint16        `json:"v"`
-	HLC           HLC           `json:"hlc"`
-	Epoch         uint64        `json:"epoch"`
-	BaseDigest    string        `json:"base"` // digest of the AddressSet this delta applies to
-	Ops           []DeltaEntry  `json:"ops"`
-	UpdatedAt     time.Time     `json:"ts"`
-	ExpiresAt     time.Time     `json:"exp"`
-	PubKey        []byte        `json:"pk,omitempty"`
-	Signature     []byte        `json:"sig,omitempty"`
+	NodeID        string       `json:"nodeId"`
+	Partition     string       `json:"partition,omitempty"`
+	SchemaVersion uint16       `json:"v"`
+	HLC           HLC          `json:"hlc"`
+	Epoch         uint64       `json:"epoch"`
+	BaseDigest    string       `json:"base"` // digest of the AddressSet this delta applies to
+	Ops           []DeltaEntry `json:"ops"`
+	UpdatedAt     time.Time    `json:"ts"`
+	ExpiresAt     time.Time    `json:"exp"`
+	PubKey        []byte       `json:"pk,omitempty"`
+	Signature     []byte       `json:"sig,omitempty"`
 }
 
 // DeltaSchemaFlag marks a record body as a DeltaRecord (vs ReachRecord).

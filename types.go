@@ -15,7 +15,7 @@ const SchemaVersion uint16 = 1
 
 // ReachRecord extends ledger.ReachRecord with publisher-authored fields.
 // It is marshaled as JSON into ledger.Record.Body when published, then
-// unmarshaled here when read back. The base ledger schema fields (TenantID,
+// unmarshaled here when read back. The base ledger schema fields (Partition,
 // NodeID, Seq, Addresses, Region, UpdatedAt, ExpiresAt) are preserved so
 // existing consumers of the ledger cache continue to work unchanged.
 //
@@ -24,7 +24,7 @@ const SchemaVersion uint16 = 1
 // slice (which is still emitted for compatibility within this repo).
 type ReachRecord struct {
 	// ── Ledger-compatible base ──────────────────────────────────────
-	TenantID      string             `json:"tenant,omitempty"`
+	Partition     string             `json:"partition,omitempty"`
 	NodeID        string             `json:"nodeId"`
 	Seq           uint64             `json:"seq"`
 	Addresses     []lad.ReachAddress `json:"addrs"`
@@ -101,10 +101,10 @@ func (a Address) IsExpired(now time.Time) bool {
 type Scope string
 
 const (
-	ScopeUnknown   Scope = ""
-	ScopeLoopback  Scope = "loopback"
-	ScopePrivate   Scope = "private" // RFC1918 / fdaa: / ULA
-	ScopeOrg       Scope = "org"     // same-org mesh (encrypted for non-org peers)
+	ScopeUnknown  Scope = ""
+	ScopeLoopback Scope = "loopback"
+	ScopePrivate  Scope = "private" // RFC1918 / fdaa: / ULA
+	ScopeOrg      Scope = "org"     // same-org mesh (encrypted for non-org peers)
 	ScopePublic   Scope = "public"
 )
 
@@ -123,18 +123,18 @@ const (
 type AddressSource uint8
 
 const (
-	SrcUnknown AddressSource = iota
-	SrcStatic                // operator config
-	SrcDNS                   // self-DNS resolution of PublicDomain
-	SrcPlatformEnv           // FLY_PUBLIC_IP / similar
-	SrcIMDS                  // cloud instance metadata (AWS/GCP)
-	SrcK8sDownward           // k8s POD_IP / HOST_IP env
-	SrcInterface             // net.Interfaces enumeration
-	SrcSTUN                  // server-reflexive via STUN
-	SrcTURN                  // allocated via TURN
-	SrcReflection            // peer-observed (X-VL1-Observed-IP quorum)
-	SrcICE                   // ICE candidate pair
-	SrcUPnP                  // UPnP/NAT-PMP port mapping
+	SrcUnknown     AddressSource = iota
+	SrcStatic                    // operator config
+	SrcDNS                       // self-DNS resolution of PublicDomain
+	SrcPlatformEnv               // FLY_PUBLIC_IP / similar
+	SrcIMDS                      // cloud instance metadata (AWS/GCP)
+	SrcK8sDownward               // k8s POD_IP / HOST_IP env
+	SrcInterface                 // net.Interfaces enumeration
+	SrcSTUN                      // server-reflexive via STUN
+	SrcTURN                      // allocated via TURN
+	SrcReflection                // peer-observed (X-VL1-Observed-IP quorum)
+	SrcICE                       // ICE candidate pair
+	SrcUPnP                      // UPnP/NAT-PMP port mapping
 )
 
 // String returns a short stable name for the source.
@@ -172,19 +172,19 @@ func (s AddressSource) String() string {
 type Capabilities uint32
 
 const (
-	CapQUICv2       Capabilities = 1 << 0 // RFC 9369
-	CapQUIC0RTT     Capabilities = 1 << 1 // session resumption
-	CapMASQUE       Capabilities = 1 << 2 // HTTP/3 CONNECT-UDP tunnel
+	CapQUICv2        Capabilities = 1 << 0 // RFC 9369
+	CapQUIC0RTT      Capabilities = 1 << 1 // session resumption
+	CapMASQUE        Capabilities = 1 << 2 // HTTP/3 CONNECT-UDP tunnel
 	CapMultipathQUIC Capabilities = 1 << 3
-	CapNoiseIK      Capabilities = 1 << 4 // pre-shared identity
-	CapPortMapping  Capabilities = 1 << 5 // published port maps differently internally
-	CapZeroRTTSafe  Capabilities = 1 << 6 // server willing to process 0-RTT
-	CapAnycast      Capabilities = 1 << 7
-	CapDedicated    Capabilities = 1 << 8 // dedicated IP (not shared anycast pool)
-	CapMTUProbed    Capabilities = 1 << 9
-	CapRelay        Capabilities = 1 << 10 // this address is a TURN-allocated relay
-	CapAgentNode    Capabilities = 1 << 11 // advertised by a desktop/laptop agent, not a fleet node
-	CapEdgeAnchor   Capabilities = 1 << 12 // node also serves LAD anchor snapshots
+	CapNoiseIK       Capabilities = 1 << 4 // pre-shared identity
+	CapPortMapping   Capabilities = 1 << 5 // published port maps differently internally
+	CapZeroRTTSafe   Capabilities = 1 << 6 // server willing to process 0-RTT
+	CapAnycast       Capabilities = 1 << 7
+	CapDedicated     Capabilities = 1 << 8 // dedicated IP (not shared anycast pool)
+	CapMTUProbed     Capabilities = 1 << 9
+	CapRelay         Capabilities = 1 << 10 // this address is a TURN-allocated relay
+	CapAgentNode     Capabilities = 1 << 11 // advertised by a desktop/laptop agent, not a fleet node
+	CapEdgeAnchor    Capabilities = 1 << 12 // node also serves LAD anchor snapshots
 )
 
 // Has reports whether the bit is set.

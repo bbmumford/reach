@@ -23,7 +23,7 @@ var ErrUnsignedRecord = errors.New("reach: record is unsigned")
 // of the record and signs it with the given Ed25519 private key. Sets both
 // PubKey and Signature on rec.
 //
-// The canonical form includes NodeID, TenantID, SchemaVersion, HLC, Epoch,
+// The canonical form includes NodeID, Partition, SchemaVersion, HLC, Epoch,
 // the sorted AddressSet digest, any Tombstone, and any EncryptedOrg fields.
 // It intentionally excludes Seq, UpdatedAt, and ExpiresAt — those are ledger
 // envelope concerns that can be refreshed without changing the record's
@@ -61,7 +61,7 @@ func canonicalSignatureBytes(rec *ReachRecord) []byte {
 	var buf []byte
 	buf = appendLenPrefixed(buf, []byte("reach:v1"))
 	buf = appendLenPrefixed(buf, []byte(rec.NodeID))
-	buf = appendLenPrefixed(buf, []byte(rec.TenantID))
+	buf = appendLenPrefixed(buf, []byte(rec.Partition))
 
 	// SchemaVersion
 	var v [2]byte
@@ -183,7 +183,7 @@ func canonicalDeltaBytes(d *DeltaRecord) []byte {
 	var buf []byte
 	buf = appendLenPrefixed(buf, []byte("reach-delta:v1"))
 	buf = appendLenPrefixed(buf, []byte(d.NodeID))
-	buf = appendLenPrefixed(buf, []byte(d.TenantID))
+	buf = appendLenPrefixed(buf, []byte(d.Partition))
 
 	var v [2]byte
 	binary.BigEndian.PutUint16(v[:], d.SchemaVersion)

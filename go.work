@@ -1,0 +1,9 @@
+go 1.25.0
+
+// Local dev bridge: reach/go.mod pins ledger v0.0.6, but publisher.go writes
+// ledger.Record.Partition, which exists only in the unpublished ../ledger
+// working tree. Resolve ledger locally until it is published and reach bumps
+// its pin.
+use .
+
+use ../ledger

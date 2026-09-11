@@ -19,7 +19,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 
 	rec := ReachRecord{
 		NodeID:        "node-a",
-		TenantID:      "tenant-x",
+		Partition:     "tenant-x",
 		SchemaVersion: 1,
 		HLC:           HLC{Wall: 1, Logical: 2, NodeID: "node-a"},
 		Epoch:         42,
