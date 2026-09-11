@@ -9,7 +9,7 @@ import (
 )
 
 func TestOrgSealRoundTrip(t *testing.T) {
-	key := OrgKey{ID: "key-1", Key: make([]byte, 32)}
+	key := GroupKey{ID: "key-1", Key: make([]byte, 32)}
 	if _, err := rand.Read(key.Key); err != nil {
 		t.Fatal(err)
 	}
@@ -17,12 +17,12 @@ func TestOrgSealRoundTrip(t *testing.T) {
 		{Host: "fdaa:0:1::2", Port: 41641, Proto: "udp", Scope: ScopePrivate, Source: SrcInterface},
 		{Host: "10.0.0.5", Port: 41641, Proto: "udp", Scope: ScopePrivate, Source: SrcInterface},
 	}
-	section, err := SealOrg(addrs, key)
+	section, err := SealGroup(addrs, key)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	opened, err := OpenOrg(section, key)
+	opened, err := OpenGroup(section, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,18 +37,18 @@ func TestOrgSealRoundTrip(t *testing.T) {
 }
 
 func TestOrgSealWrongKeyRejected(t *testing.T) {
-	key1 := OrgKey{ID: "k1", Key: make([]byte, 32)}
+	key1 := GroupKey{ID: "k1", Key: make([]byte, 32)}
 	_, _ = rand.Read(key1.Key)
-	key2 := OrgKey{ID: "k1", Key: make([]byte, 32)}
+	key2 := GroupKey{ID: "k1", Key: make([]byte, 32)}
 	_, _ = rand.Read(key2.Key)
 
 	addrs := []Address{{Host: "1.2.3.4", Port: 41641, Proto: "udp", Scope: ScopePrivate, Source: SrcInterface}}
-	section, err := SealOrg(addrs, key1)
+	section, err := SealGroup(addrs, key1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = OpenOrg(section, key2)
-	if !errors.Is(err, ErrOrgKeyMismatch) {
-		t.Fatalf("expected ErrOrgKeyMismatch, got %v", err)
+	_, err = OpenGroup(section, key2)
+	if !errors.Is(err, ErrGroupKeyMismatch) {
+		t.Fatalf("expected ErrGroupKeyMismatch, got %v", err)
 	}
 }

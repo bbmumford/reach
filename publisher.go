@@ -651,11 +651,11 @@ func (p *Publisher) needsTTLRefresh(now time.Time) bool {
 func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 	hlc := p.cfg.Clock.Tick()
 
-	// Separate private (for org-encryption) from public (flat + AddressSet).
+	// Separate private (for group encryption) from public (flat + AddressSet).
 	var publicSet []Address
 	var privateSet []Address
 	for _, a := range addrs {
-		if a.Scope == ScopePrivate || a.Scope == ScopeOrg {
+		if a.Scope == ScopePrivate || a.Scope == ScopeGroup {
 			privateSet = append(privateSet, a)
 		} else {
 			publicSet = append(publicSet, a)
@@ -684,7 +684,7 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 	}
 
 	rec := ReachRecord{
-		Partition:     p.cfg.TenantID,
+		Partition:     p.cfg.Partition,
 		NodeID:        p.cfg.NodeID,
 		Seq:           uint64(hlc.Wall),
 		Addresses:     flat,
@@ -699,18 +699,18 @@ func (p *Publisher) buildRecord(addrs []Address, now time.Time) ReachRecord {
 		Metadata:      p.cfg.Metadata.Clone(),
 	}
 
-	// Seal private addresses for same-org peers if we have a key.
-	if len(privateSet) > 0 && len(p.cfg.OrgKey.Key) > 0 {
-		if section, err := SealOrg(privateSet, p.cfg.OrgKey); err == nil {
-			rec.EncryptedOrg = section
+	// Seal private addresses for same-group peers if we have a key.
+	if len(privateSet) > 0 && len(p.cfg.GroupKey.Key) > 0 {
+		if section, err := SealGroup(privateSet, p.cfg.GroupKey); err == nil {
+			rec.EncryptedGroup = section
 		} else {
-			log.Printf("[reach] seal org: %v", err)
+			log.Printf("[reach] seal group: %v", err)
 			// Fall back: advertise in public AddressSet with Scope="private".
 			rec.AddressSet = append(rec.AddressSet, privateSet...)
 		}
 	} else {
-		// No org key configured — private addresses still get advertised in
-		// AddressSet (same-org determination happens on read).
+		// No group key configured — private addresses still get advertised in
+		// AddressSet (same-group determination happens on read).
 		rec.AddressSet = append(rec.AddressSet, privateSet...)
 	}
 
@@ -724,7 +724,7 @@ func (p *Publisher) buildDelta(ops []DeltaEntry, baseDigest string, now time.Tim
 	hlc := p.cfg.Clock.Tick()
 	drec := DeltaRecord{
 		NodeID:        p.cfg.NodeID,
-		Partition:     p.cfg.TenantID,
+		Partition:     p.cfg.Partition,
 		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
 		HLC:           hlc,
 		Epoch:         p.cfg.Epoch,
@@ -836,7 +836,7 @@ func (p *Publisher) publishTombstone(ctx context.Context, reason string) {
 	hlc := p.cfg.Clock.Tick()
 	now := time.Now().UTC()
 	rec := ReachRecord{
-		Partition:     p.cfg.TenantID,
+		Partition:     p.cfg.Partition,
 		NodeID:        p.cfg.NodeID,
 		Seq:           uint64(hlc.Wall),
 		Region:        p.cfg.Region,
