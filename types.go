@@ -43,7 +43,7 @@ type ReachRecord struct {
 	Epoch         uint64            `json:"epoch,omitempty"`
 	AddressSet    []Address         `json:"addrsV1,omitempty"`
 	Tombstone     *TombstoneInfo    `json:"tombstone,omitempty"`
-	EncryptedOrg  *EncryptedSection `json:"encOrg,omitempty"`
+	EncryptedGroup  *EncryptedSection `json:"encGroup,omitempty"`
 	PubKey        []byte            `json:"pk,omitempty"`
 	Signature     []byte            `json:"sig,omitempty"`
 
@@ -67,7 +67,7 @@ type Address struct {
 	Host           string           `json:"h"`
 	Port           uint16           `json:"p"`
 	Proto          string           `json:"pr"`          // udp|quic|wss|tls|grpc
-	Scope          Scope            `json:"s"`           // public|private|org|loopback
+	Scope          Scope            `json:"s"`           // public|private|group|loopback
 	Family         Family           `json:"f,omitempty"` // ipv4|ipv6|hostname
 	Source         AddressSource    `json:"src"`         // dns|stun|iface|reflection|static|turn|imds
 	Confidence     uint8            `json:"c"`           // 0-100
@@ -104,7 +104,7 @@ const (
 	ScopeUnknown  Scope = ""
 	ScopeLoopback Scope = "loopback"
 	ScopePrivate  Scope = "private" // RFC1918 / fdaa: / ULA
-	ScopeOrg      Scope = "org"     // same-org mesh (encrypted for non-org peers)
+	ScopeGroup    Scope = "group"   // same-group mesh (encrypted for peers outside the group)
 	ScopePublic   Scope = "public"
 )
 
@@ -201,10 +201,10 @@ type TombstoneInfo struct {
 }
 
 // EncryptedSection carries a ChaCha20-Poly1305 sealed payload containing
-// additional (private-scope) addresses that only same-org peers should see.
+// additional (private-scope) addresses that only same-group peers should see.
 type EncryptedSection struct {
-	OrgID      string `json:"org"`
-	KeyID      string `json:"kid,omitempty"` // short identifier for the org symmetric key
+	GroupID      string `json:"group"`
+	KeyID      string `json:"kid,omitempty"` // short identifier for the group symmetric key
 	Nonce      []byte `json:"n"`             // 12-byte ChaCha20-Poly1305 nonce
 	Ciphertext []byte `json:"ct"`
 }

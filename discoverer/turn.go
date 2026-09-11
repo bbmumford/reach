@@ -53,9 +53,9 @@ type CredentialFunc func(ctx context.Context) (Credential, error)
 //      on both client and server. The helper StandardRESTCredentials() builds
 //      this for you.
 //
-//   3. Custom schemes (tenant-keyed HKDF, mTLS, etc.): supply your own
+//   3. Custom schemes (partition-keyed HKDF, mTLS, etc.): supply your own
 //      CredentialFunc. Helpers HKDFHMACCredentials() and BuildTURNPassword()
-//      cover the HKDF-derived-secret variant that some multi-tenant relays
+//      cover the HKDF-derived-secret variant that some multi-partition relays
 //      (including ORBTR's relay.orbtr.io) use.
 type TURN struct {
 	Base
@@ -156,24 +156,24 @@ func StandardRESTCredentials(userID string, sharedSecret []byte, ttl time.Durati
 	}
 }
 
-// HKDFHMACCredentials builds a CredentialFunc for multi-tenant TURN servers
+// HKDFHMACCredentials builds a CredentialFunc for multi-partition TURN servers
 // that expect an HKDF-derived-then-HMAC password pipeline (the scheme ORBTR's
 // relay.orbtr.io uses):
 //
-//	username = "{expiry_unix}:{tenantID}:{sessionID}"
-//	key      = HKDF-SHA256(tenantPSK, salt=hkdfSalt, info=tenantID)[:32]
+//	username = "{expiry_unix}:{partitionID}:{sessionID}"
+//	key      = HKDF-SHA256(partitionPSK, salt=hkdfSalt, info=partitionID)[:32]
 //	password = base64(HMAC-SHA1(hex(key), username))
 //
-// Both sides (client + server) must derive with identical hkdfSalt. tenantPSK
-// is the per-tenant shared secret provisioned out-of-band.
-func HKDFHMACCredentials(tenantID, sessionID string, tenantPSK, hkdfSalt []byte, ttl time.Duration) CredentialFunc {
+// Both sides (client + server) must derive with identical hkdfSalt.
+// partitionPSK is the per-partition shared secret provisioned out-of-band.
+func HKDFHMACCredentials(partitionID, sessionID string, partitionPSK, hkdfSalt []byte, ttl time.Duration) CredentialFunc {
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
 	return func(context.Context) (Credential, error) {
 		exp := time.Now().Add(ttl).Unix()
-		username := fmt.Sprintf("%d:%s:%s", exp, tenantID, sessionID)
-		password, err := BuildTURNPassword(username, tenantPSK, hkdfSalt, tenantID)
+		username := fmt.Sprintf("%d:%s:%s", exp, partitionID, sessionID)
+		password, err := BuildTURNPassword(username, partitionPSK, hkdfSalt, partitionID)
 		if err != nil {
 			return Credential{}, err
 		}
@@ -343,17 +343,17 @@ func (t *TURN) allocate(ctx context.Context) (*allocation, error) {
 //
 // Pipeline:
 //
-//	derived = HKDF-SHA256(tenantPSK, salt, info=tenantID)[:32]
+//	derived = HKDF-SHA256(partitionPSK, salt, info=partitionID)[:32]
 //	secret  = hex(derived)
 //	pw      = base64(HMAC-SHA1(secret, username))
 //
 // Exported because the consuming TURN server needs the identical pipeline to
 // validate incoming credentials — both sides share this single source of truth.
-func BuildTURNPassword(username string, tenantPSK, hkdfSalt []byte, tenantID string) (string, error) {
-	if len(tenantPSK) == 0 {
-		return "", errors.New("reach: empty tenant PSK")
+func BuildTURNPassword(username string, partitionPSK, hkdfSalt []byte, partitionID string) (string, error) {
+	if len(partitionPSK) == 0 {
+		return "", errors.New("reach: empty partition PSK")
 	}
-	r := hkdf.New(sha256.New, tenantPSK, hkdfSalt, []byte(tenantID))
+	r := hkdf.New(sha256.New, partitionPSK, hkdfSalt, []byte(partitionID))
 	derived := make([]byte, 32)
 	if _, err := io.ReadFull(r, derived); err != nil {
 		return "", fmt.Errorf("reach: hkdf derive: %w", err)

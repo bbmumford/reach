@@ -87,9 +87,9 @@ const (
 // Sensible defaults apply when fields are left zero.
 type Config struct {
 	// ── Identity ────────────────────────────────────────────────────
-	NodeID   string
-	TenantID string
-	Region   string
+	NodeID    string
+	Partition string
+	Region    string
 
 	// Metadata is the consumer-defined identity blob carried in every
 	// signed ReachRecord. Consumers decide what goes in here — the reach
@@ -100,10 +100,6 @@ type Config struct {
 	// cache derives lad.MemberRecord views on read from this map, so
 	// consumers don't need a parallel Member publish path.
 	Metadata Metadata
-
-	// OrgID groups nodes whose private addresses should be mutually visible
-	// but hidden from non-org peers. May be empty for single-tenant deployments.
-	OrgID string
 
 	// Ed25519 private key for signing ReachRecord. Required.
 	Signer ed25519.PrivateKey
@@ -132,7 +128,7 @@ type Config struct {
 	TTLPerSource map[AddressSource]time.Duration
 
 	// ── Privacy ─────────────────────────────────────────────────────
-	OrgKey OrgKey // when present, private-scope addresses go in EncryptedOrg
+	GroupKey GroupKey // when present, private-scope addresses go in EncryptedGroup
 
 	// ── Persistence ────────────────────────────────────────────────
 	PersistPath string // last-good record JSON; empty disables persistence

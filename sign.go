@@ -24,7 +24,7 @@ var ErrUnsignedRecord = errors.New("reach: record is unsigned")
 // PubKey and Signature on rec.
 //
 // The canonical form includes NodeID, Partition, SchemaVersion, HLC, Epoch,
-// the sorted AddressSet digest, any Tombstone, and any EncryptedOrg fields.
+// the sorted AddressSet digest, any Tombstone, and any EncryptedGroup fields.
 // It intentionally excludes Seq, UpdatedAt, and ExpiresAt — those are ledger
 // envelope concerns that can be refreshed without changing the record's
 // semantic identity.
@@ -109,11 +109,11 @@ func canonicalSignatureBytes(rec *ReachRecord) []byte {
 	}
 
 	// Encrypted section
-	if rec.EncryptedOrg != nil {
-		buf = appendLenPrefixed(buf, []byte(rec.EncryptedOrg.OrgID))
-		buf = appendLenPrefixed(buf, []byte(rec.EncryptedOrg.KeyID))
-		buf = appendLenPrefixed(buf, rec.EncryptedOrg.Nonce)
-		buf = appendLenPrefixed(buf, rec.EncryptedOrg.Ciphertext)
+	if rec.EncryptedGroup != nil {
+		buf = appendLenPrefixed(buf, []byte(rec.EncryptedGroup.GroupID))
+		buf = appendLenPrefixed(buf, []byte(rec.EncryptedGroup.KeyID))
+		buf = appendLenPrefixed(buf, rec.EncryptedGroup.Nonce)
+		buf = appendLenPrefixed(buf, rec.EncryptedGroup.Ciphertext)
 	} else {
 		buf = appendLenPrefixed(buf, nil)
 		buf = appendLenPrefixed(buf, nil)

@@ -202,7 +202,7 @@ func (p *Platform) discoverK8s() []reach.Address {
 				Host:       podIP,
 				Port:       p.udpPort,
 				Proto:      "udp",
-				Scope:      reach.ScopeOrg, // cluster-internal
+				Scope:      reach.ScopeGroup, // cluster-internal
 				Family:     family,
 				Source:     reach.SrcK8sDownward,
 				Confidence: 85,
