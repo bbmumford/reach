@@ -171,6 +171,21 @@ func (h *hookedLedger) Stream(ctx context.Context, from lad.CausalWatermark, top
 	return h.inner.Stream(ctx, from, topics)
 }
 
+// StreamWithEnd forwards to the inner ledger's, so a consumer handed this
+// wrapper reads why its stream ended: loom's gossip.Synchronizer.Sync takes
+// lad.EndReportingLedger, streams again after lad.ErrStreamOverflow and stops
+// at lad.ErrLedgerClosed, and without this method it would restart on every
+// end, the close included, until its own context ended. An inner ledger that
+// does not report its ends gives a StreamEnd that is never set, which reads
+// the same as streaming the inner ledger directly.
+func (h *hookedLedger) StreamWithEnd(ctx context.Context, from lad.CausalWatermark, topics []lad.Topic) (<-chan lad.Record, *lad.StreamEnd, error) {
+	if er, ok := h.inner.(lad.EndReportingLedger); ok {
+		return er.StreamWithEnd(ctx, from, topics)
+	}
+	out, err := h.inner.Stream(ctx, from, topics)
+	return out, &lad.StreamEnd{}, err
+}
+
 func (h *hookedLedger) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 	return h.inner.Snapshot(ctx)
 }
