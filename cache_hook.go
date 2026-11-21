@@ -20,16 +20,13 @@ var ErrRecordRejected = errors.New("reach: record rejected")
 // verification, replay protection, and per-node rate limiting on every
 // ReachRecord (and DeltaRecord) that arrives at the ledger cache.
 //
-// Consumers wrap their native ledger.Ledger with this hook so §5.13
-// (signature verify), §5.22 (HLC conflict + epoch), §5.30 (rate limit),
-// and §5.31 (replay guard) are actually enforced rather than advisory.
+// Consumers wrap their native ledger.Ledger with this hook so signature
+// verification, the (Epoch, HLC) replay guard and the per-node rate limit are
+// enforced on the ledger's write path rather than left to each reader.
 //
 // Usage:
 //
-//	hook := reach.NewCacheApplyHook(reach.CacheHookConfig{
-//	    RequireValidSig: true,
-//	    Metrics:         metrics,
-//	})
+//	hook := reach.NewCacheApplyHook(reach.CacheHookConfig{Metrics: metrics})
 //	wrapped := hook.Wrap(myLedger)
 //	// or call hook.Check(rec) directly inside a custom Apply implementation.
 type CacheApplyHook struct {
@@ -41,10 +38,12 @@ type CacheApplyHook struct {
 
 // CacheHookConfig bundles tunables for the cache-side enforcement hook.
 type CacheHookConfig struct {
-	// RequireValidSig rejects any TopicReach record that fails Verify().
-	// Default true — flip to false only during a staged rollout when peers
-	// may briefly emit unsigned records.
-	RequireValidSig bool
+	// SkipSignatureCheck applies a TopicReach record that fails Verify or
+	// VerifyDelta instead of rejecting it. The zero value verifies every
+	// record, so a hook built without this field set fails closed. Set it
+	// only while peers may still emit unsigned records; such a record's rate
+	// and replay state are kept apart from every verified node's.
+	SkipSignatureCheck bool
 
 	// ReplayWindow bounds how long per-node replay state is retained.
 	// Nodes that re-introduce after the window are accepted with fresh Epoch.
@@ -85,8 +84,8 @@ func (h *CacheApplyHook) Wrap(inner lad.Ledger) lad.Ledger {
 // The record is verified first, and rate and replay state are charged to the
 // NodeID its key proves, never to the NodeID it claims: a record any key can
 // sign must not spend another node's rate budget or move its replay state. A
-// record that fails verification is refused when RequireValidSig is set;
-// otherwise it is charged under unverifiedKey, apart from every verified node.
+// record that fails verification is refused unless SkipSignatureCheck is set,
+// and is then charged under unverifiedKey, apart from every verified node.
 func (h *CacheApplyHook) Check(rec lad.Record) error {
 	if rec.Topic != lad.TopicReach {
 		return nil
@@ -109,7 +108,7 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 		}
 		id, err := verifiedDeltaNodeID(&d)
 		if err != nil {
-			if h.cfg.RequireValidSig {
+			if !h.cfg.SkipSignatureCheck {
 				h.cfg.Metrics.SignatureInvalid()
 				return fmt.Errorf("%w: delta signature: %v", ErrRecordRejected, err)
 			}
@@ -127,7 +126,7 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 	}
 	id, err := verifiedNodeID(&r)
 	if err != nil {
-		if h.cfg.RequireValidSig {
+		if !h.cfg.SkipSignatureCheck {
 			h.cfg.Metrics.SignatureInvalid()
 			return fmt.Errorf("%w: reach signature: %v", ErrRecordRejected, err)
 		}

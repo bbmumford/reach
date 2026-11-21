@@ -35,7 +35,7 @@ func TestCacheHookForgedRecordsDoNotSpendTheVictimsRateBudget(t *testing.T) {
 	victimPub, victimPriv := seededKey(10)
 	_, attackerPriv := seededKey(11)
 	victim := meshNodeID(victimPub)
-	hook := NewCacheApplyHook(CacheHookConfig{RequireValidSig: true, RatePerMin: 3})
+	hook := NewCacheApplyHook(CacheHookConfig{RatePerMin: 3})
 
 	for i := 0; i < 3; i++ {
 		forged := ReachRecord{NodeID: victim, SchemaVersion: 1, HLC: HLC{Wall: int64(100 + i)}, Epoch: 9, UpdatedAt: time.Now()}
@@ -58,7 +58,7 @@ func TestCacheHookForgedDeltasDoNotSpendTheVictimsRateBudget(t *testing.T) {
 	victimPub, victimPriv := seededKey(12)
 	_, attackerPriv := seededKey(13)
 	victim := meshNodeID(victimPub)
-	hook := NewCacheApplyHook(CacheHookConfig{RequireValidSig: true, RatePerMin: 2})
+	hook := NewCacheApplyHook(CacheHookConfig{RatePerMin: 2})
 
 	for i := 0; i < 2; i++ {
 		forged := DeltaRecord{NodeID: victim, SchemaVersion: SchemaVersion | DeltaSchemaFlag, HLC: HLC{Wall: int64(100 + i)}, Epoch: 9, BaseDigest: "b"}
@@ -83,7 +83,7 @@ func TestCacheHookUnverifiedRecordsDoNotAdvanceAVerifiedNodesReplayState(t *test
 	victimPub, victimPriv := seededKey(14)
 	_, attackerPriv := seededKey(15)
 	victim := meshNodeID(victimPub)
-	hook := NewCacheApplyHook(CacheHookConfig{RequireValidSig: false})
+	hook := NewCacheApplyHook(CacheHookConfig{SkipSignatureCheck: true})
 
 	forged := ReachRecord{NodeID: victim, SchemaVersion: 1, HLC: HLC{Wall: 1 << 50}, Epoch: 1 << 40, UpdatedAt: time.Now()}
 	Sign(&forged, attackerPriv)
