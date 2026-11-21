@@ -3,6 +3,7 @@ module github.com/bbmumford/reach
 go 1.25.0
 
 require (
+	github.com/ORBTR/aether v0.0.117
 	github.com/bbmumford/ledger v0.0.6
 	github.com/pion/ice/v3 v3.0.16
 	github.com/pion/stun/v3 v3.1.1
@@ -25,7 +26,8 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v3 v3.0.3 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

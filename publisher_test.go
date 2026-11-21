@@ -46,10 +46,10 @@ type staticDiscoverer struct {
 	mu      sync.Mutex
 }
 
-func (s *staticDiscoverer) Name() string                    { return s.name }
-func (s *staticDiscoverer) Source() AddressSource           { return s.source }
-func (s *staticDiscoverer) Interval() time.Duration         { return 5 * time.Minute }
-func (s *staticDiscoverer) EnabledFor(string) bool          { return true }
+func (s *staticDiscoverer) Name() string            { return s.name }
+func (s *staticDiscoverer) Source() AddressSource   { return s.source }
+func (s *staticDiscoverer) Interval() time.Duration { return 5 * time.Minute }
+func (s *staticDiscoverer) EnabledFor(string) bool  { return true }
 func (s *staticDiscoverer) Discover(_ context.Context) ([]Address, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,15 +95,15 @@ func TestPublisherDigestSkip(t *testing.T) {
 }
 
 func TestPublisherSignAndICE(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	mem := &memLedger{}
 	addrs := []Address{
 		{Host: "1.2.3.4", Port: 41641, Proto: "udp", Scope: ScopePublic, Source: SrcDNS, Confidence: 70},
 	}
 	disc := &staticDiscoverer{name: "dns", source: SrcDNS, addrs: addrs}
 
-	pub, err := NewPublisher(Config{
-		NodeID:      "node-a",
+	p, err := NewPublisher(Config{
+		NodeID:      meshNodeID(pub),
 		Region:      "iad",
 		Signer:      priv,
 		Ledger:      mem,
@@ -112,7 +112,7 @@ func TestPublisherSignAndICE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pub.publishOnce(context.Background(), PublishReasonBootstrap); err != nil {
+	if err := p.publishOnce(context.Background(), PublishReasonBootstrap); err != nil {
 		t.Fatal(err)
 	}
 	recs := mem.all()

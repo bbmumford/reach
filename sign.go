@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/ORBTR/aether"
 	lad "github.com/bbmumford/ledger"
 )
 
@@ -18,6 +19,11 @@ var ErrSignatureInvalid = errors.New("reach: invalid signature")
 // ErrUnsignedRecord is returned when Verify is called on a record with no
 // signature or public key.
 var ErrUnsignedRecord = errors.New("reach: record is unsigned")
+
+// ErrNodeIDMismatch is returned by Verify and VerifyDelta when the record's
+// NodeID is not the NodeID its signing key derives, so the record claims to
+// speak for a node whose key did not sign it.
+var ErrNodeIDMismatch = errors.New("reach: record NodeID does not derive from its signing key")
 
 // Sign computes a canonical digest over the semantically-meaningful fields
 // of the record and signs it with the given Ed25519 private key. Sets both
@@ -34,24 +40,54 @@ func Sign(rec *ReachRecord, key ed25519.PrivateKey) {
 	rec.Signature = ed25519.Sign(key, content)
 }
 
-// Verify checks the Ed25519 signature on a ReachRecord.
+// Verify checks the Ed25519 signature on a ReachRecord and that the record's
+// NodeID is the NodeID its PubKey derives.
 // Returns nil on success, ErrUnsignedRecord if the record has no signature,
-// or ErrSignatureInvalid if the signature does not match.
+// ErrSignatureInvalid if the signature does not match, or ErrNodeIDMismatch
+// if the NodeID is not the signing key's.
 func Verify(rec ReachRecord) error {
+	_, err := verifiedNodeID(&rec)
+	return err
+}
+
+// verifiedNodeID runs Verify's checks on rec and returns the NodeID its key
+// proves, the identity CacheApplyHook charges rate and replay state to.
+func verifiedNodeID(rec *ReachRecord) (string, error) {
 	if len(rec.PubKey) == 0 || len(rec.Signature) == 0 {
-		return ErrUnsignedRecord
+		return "", ErrUnsignedRecord
 	}
 	if len(rec.PubKey) != ed25519.PublicKeySize {
-		return ErrSignatureInvalid
+		return "", ErrSignatureInvalid
 	}
 	if len(rec.Signature) != ed25519.SignatureSize {
-		return ErrSignatureInvalid
+		return "", ErrSignatureInvalid
 	}
-	content := canonicalSignatureBytes(&rec)
+	id, err := keyNodeID(rec.NodeID, rec.PubKey)
+	if err != nil {
+		return "", err
+	}
+	content := canonicalSignatureBytes(rec)
 	if !ed25519.Verify(rec.PubKey, content, rec.Signature) {
-		return ErrSignatureInvalid
+		return "", ErrSignatureInvalid
 	}
-	return nil
+	return id, nil
+}
+
+// keyNodeID returns the NodeID pub derives under aether.NewNodeID, the scheme
+// mesh NodeIDs are made by, or ErrNodeIDMismatch when claimed is not exactly
+// that NodeID. The comparison is exact because the signed bytes carry the
+// NodeID as the publisher wrote it, and the publisher writes its Config.NodeID
+// unchanged. It runs before the signature check, so a record naming another
+// node's NodeID is refused without an Ed25519 verification.
+func keyNodeID(claimed string, pub []byte) (string, error) {
+	derived, err := aether.NewNodeID(ed25519.PublicKey(pub))
+	if err != nil {
+		return "", ErrSignatureInvalid
+	}
+	if string(derived) != claimed {
+		return "", ErrNodeIDMismatch
+	}
+	return string(derived), nil
 }
 
 // canonicalSignatureBytes produces the stable byte sequence that is signed.
@@ -164,19 +200,31 @@ func signDelta(d *DeltaRecord, key ed25519.PrivateKey) {
 	d.Signature = ed25519.Sign(key, content)
 }
 
-// VerifyDelta checks the Ed25519 signature on a DeltaRecord. Same errors as Verify.
+// VerifyDelta checks the Ed25519 signature on a DeltaRecord and that its
+// NodeID is the signing key's. Same errors as Verify.
 func VerifyDelta(d DeltaRecord) error {
+	_, err := verifiedDeltaNodeID(&d)
+	return err
+}
+
+// verifiedDeltaNodeID runs VerifyDelta's checks on d and returns the NodeID
+// its key proves.
+func verifiedDeltaNodeID(d *DeltaRecord) (string, error) {
 	if len(d.PubKey) == 0 || len(d.Signature) == 0 {
-		return ErrUnsignedRecord
+		return "", ErrUnsignedRecord
 	}
 	if len(d.PubKey) != ed25519.PublicKeySize || len(d.Signature) != ed25519.SignatureSize {
-		return ErrSignatureInvalid
+		return "", ErrSignatureInvalid
 	}
-	content := canonicalDeltaBytes(&d)
+	id, err := keyNodeID(d.NodeID, d.PubKey)
+	if err != nil {
+		return "", err
+	}
+	content := canonicalDeltaBytes(d)
 	if !ed25519.Verify(d.PubKey, content, d.Signature) {
-		return ErrSignatureInvalid
+		return "", ErrSignatureInvalid
 	}
-	return nil
+	return id, nil
 }
 
 func canonicalDeltaBytes(d *DeltaRecord) []byte {

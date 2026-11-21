@@ -15,13 +15,13 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = pub
+	node := meshNodeID(pub)
 
 	rec := ReachRecord{
-		NodeID:        "node-a",
+		NodeID:        node,
 		Partition:     "tenant-x",
 		SchemaVersion: 1,
-		HLC:           HLC{Wall: 1, Logical: 2, NodeID: "node-a"},
+		HLC:           HLC{Wall: 1, Logical: 2, NodeID: node},
 		Epoch:         42,
 		Region:        "iad",
 		AddressSet: []Address{
@@ -38,9 +38,9 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 }
 
 func TestVerifyRejectsTamperedAddressSet(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	rec := ReachRecord{
-		NodeID:        "node-a",
+		NodeID:        meshNodeID(pub),
 		SchemaVersion: 1,
 		HLC:           HLC{Wall: 1},
 		AddressSet: []Address{
@@ -68,9 +68,9 @@ func TestVerifyRejectsUnsigned(t *testing.T) {
 // TestVerifyCoversMetadata locks in that a peer cannot re-marshal a signed
 // record with different metadata and have it still verify.
 func TestVerifyCoversMetadata(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	rec := ReachRecord{
-		NodeID:        "node-a",
+		NodeID:        meshNodeID(pub),
 		SchemaVersion: 1,
 		HLC:           HLC{Wall: 1},
 		Metadata: Metadata{
@@ -88,7 +88,7 @@ func TestVerifyCoversMetadata(t *testing.T) {
 
 	// Also tamper by ADDING a new metadata key.
 	rec2 := ReachRecord{
-		NodeID:        "node-a",
+		NodeID:        meshNodeID(pub),
 		SchemaVersion: 1,
 		HLC:           HLC{Wall: 1},
 		Metadata:      Metadata{"service_name": "devices.orbtr.io"},

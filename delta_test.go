@@ -53,9 +53,9 @@ func TestApplyDeltaBaseMismatch(t *testing.T) {
 }
 
 func TestDeltaSignVerifyRoundTrip(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	drec := DeltaRecord{
-		NodeID:        "n1",
+		NodeID:        meshNodeID(pub),
 		Partition:     "t1",
 		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
 		HLC:           HLC{Wall: 123, Logical: 4},
