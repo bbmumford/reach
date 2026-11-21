@@ -81,6 +81,12 @@ func (h *CacheApplyHook) Wrap(inner lad.Ledger) lad.Ledger {
 // Check validates a single incoming ledger.Record against the reach
 // enforcement rules. Returns nil when the record should be applied,
 // ErrRecordRejected (wrapped) when it should be dropped.
+//
+// The record is verified first, and rate and replay state are charged to the
+// NodeID its key proves, never to the NodeID it claims: a record any key can
+// sign must not spend another node's rate budget or move its replay state. A
+// record that fails verification is refused when RequireValidSig is set;
+// otherwise it is charged under unverifiedKey, apart from every verified node.
 func (h *CacheApplyHook) Check(rec lad.Record) error {
 	if rec.Topic != lad.TopicReach {
 		return nil
@@ -88,19 +94,11 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 	// Two body shapes: ReachRecord and DeltaRecord — discriminate via
 	// SchemaVersion's high bit.
 	var probe struct {
-		NodeID        string `json:"nodeId"`
 		SchemaVersion uint16 `json:"v"`
-		HLC           HLC    `json:"hlc"`
-		Epoch         uint64 `json:"epoch"`
 	}
 	if err := json.Unmarshal(rec.Body, &probe); err != nil {
 		h.cfg.Metrics.SignatureInvalid()
 		return fmt.Errorf("%w: unmarshal probe: %v", ErrRecordRejected, err)
-	}
-
-	if !h.rate.Allow(probe.NodeID) {
-		h.cfg.Metrics.RateLimited(probe.NodeID)
-		return fmt.Errorf("%w: rate limit exceeded for %s", ErrRecordRejected, probe.NodeID)
 	}
 
 	if IsDelta(probe.SchemaVersion) {
@@ -109,18 +107,17 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 			h.cfg.Metrics.SignatureInvalid()
 			return fmt.Errorf("%w: unmarshal delta: %v", ErrRecordRejected, err)
 		}
-		if h.cfg.RequireValidSig {
-			if err := VerifyDelta(d); err != nil {
+		id, err := verifiedDeltaNodeID(&d)
+		if err != nil {
+			if h.cfg.RequireValidSig {
 				h.cfg.Metrics.SignatureInvalid()
 				return fmt.Errorf("%w: delta signature: %v", ErrRecordRejected, err)
 			}
+			id = unverifiedKey(d.NodeID)
 		}
 		// Replay guard uses a fake "reach" record carrying the same identity
 		// fields — same guard state, same monotonicity semantics.
-		if err := h.replay.Check(ReachRecord{NodeID: d.NodeID, Epoch: d.Epoch, HLC: d.HLC}); err != nil {
-			return fmt.Errorf("%w: %v", ErrRecordRejected, err)
-		}
-		return nil
+		return h.admit(id, d.NodeID, d.Epoch, d.HLC)
 	}
 
 	var r ReachRecord
@@ -128,16 +125,35 @@ func (h *CacheApplyHook) Check(rec lad.Record) error {
 		h.cfg.Metrics.SignatureInvalid()
 		return fmt.Errorf("%w: unmarshal reach: %v", ErrRecordRejected, err)
 	}
-	if h.cfg.RequireValidSig {
-		if err := Verify(r); err != nil {
+	id, err := verifiedNodeID(&r)
+	if err != nil {
+		if h.cfg.RequireValidSig {
 			h.cfg.Metrics.SignatureInvalid()
 			return fmt.Errorf("%w: reach signature: %v", ErrRecordRejected, err)
 		}
+		id = unverifiedKey(r.NodeID)
 	}
-	if err := h.replay.Check(r); err != nil {
+	return h.admit(id, r.NodeID, r.Epoch, r.HLC)
+}
+
+// admit charges one record to id's rate budget and then to id's replay state.
+// claimed is the NodeID the record names, reported to Metrics.
+func (h *CacheApplyHook) admit(id, claimed string, epoch uint64, hlc HLC) error {
+	if !h.rate.Allow(id) {
+		h.cfg.Metrics.RateLimited(claimed)
+		return fmt.Errorf("%w: rate limit exceeded for %s", ErrRecordRejected, claimed)
+	}
+	if err := h.replay.Check(ReachRecord{NodeID: id, Epoch: epoch, HLC: hlc}); err != nil {
 		return fmt.Errorf("%w: %v", ErrRecordRejected, err)
 	}
 	return nil
+}
+
+// unverifiedKey is the rate and replay key of a record whose signature or
+// NodeID binding did not verify. Every verified key is an aether NodeID and
+// begins "vl1_", so a key with this prefix never equals one.
+func unverifiedKey(claimed string) string {
+	return "unverified:" + claimed
 }
 
 // hookedLedger intercepts Append and enforces the CacheApplyHook checks.
