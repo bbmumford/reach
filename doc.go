@@ -1,4 +1,4 @@
-// Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. Licensed under MIT.
+// Copyright (c) 2026 Brandon Miller-Mumford. Licensed under the MIT License; see LICENSE.
 
 // Package reach implements the self-reach publisher for peer-to-peer meshes.
 //

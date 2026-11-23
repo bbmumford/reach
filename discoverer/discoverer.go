@@ -1,4 +1,4 @@
-// Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. Licensed under MIT.
+// Copyright (c) 2026 Brandon Miller-Mumford. Licensed under the MIT License; see LICENSE.
 
 // Package discoverer implements the address-source plugins consumed by
 // reach.Publisher. Each discoverer runs independently and contributes a
