@@ -1,82 +1,124 @@
-# Reach — Self-Reach Publisher for Peer Meshes
+# reach
 
-```
+reach lets every node of a peer-to-peer mesh tell the others how to dial it.
+Each node runs a `Publisher` that gathers its own reachable addresses from a
+set of discoverers (static, DNS, network interfaces, STUN, TURN, UPnP, the
+cloud platform's metadata, and addresses peers saw it from), signs them with
+its Ed25519 key, and appends the signed `ReachRecord` to a ledger. Peers read
+the ledger to learn where to connect; there is no central directory.
+
+How a publisher behaves:
+
+- **Publish only on change.** The address set is fingerprinted (SHA-256 over
+  the sorted set, `Digest`); an unchanged set is not published again, and a
+  small change is published as a signed delta against the last full record
+  (`DeltaRecord`), with a full snapshot every `DeltaThreshold` publishes.
+- **Cadence.** Bootstrapping (every 2 seconds for the first 30), churning
+  (every 15 seconds) and stable (every 5 minutes, or 15 for the agent
+  profile), with full jitter and at most `MaxPublishesPerMin` (default 10).
+- **Ordering.** Every record carries a hybrid logical clock stamp and an
+  `Epoch` seeded from the clock at start, so a restarted node's records order
+  after its earlier ones.
+- **Expiry.** Each address has a time to live by source (`DefaultTTLs`); the
+  record expires with its longest-lived address. On shutdown the publisher
+  writes a tombstone so peers drop it at once.
+- **Private addresses.** With a `GroupKey`, private-scope addresses are sealed
+  with ChaCha20-Poly1305 (`SealGroup`) so only holders of the key can read them
+  (`OpenGroup`).
+- **Verified addresses.** A `Prober` asks peers to dial an address back
+  (`ServeVerifyHTTP` answers such requests) and raises the address's
+  confidence when peers in enough regions reach it.
+- **Network changes.** The `events` package reports address and power changes
+  (netlink on Linux, PF_ROUTE on macOS, `NotifyUnicastIpAddressChange` on
+  Windows, a poller elsewhere, and a captive-portal check), and the publisher
+  republishes when they happen.
+- **Freshness gossip.** With a `FreshnessBus`, nodes exchange their record
+  digests every 30 seconds and pull a record whose digest differs.
+- **Last good record.** With a `PersistPath`, the last published record is
+  saved and reloaded on the next start.
+
+Receivers check records with `Verify` (and `VerifyDelta`): a record must be
+signed, the signature must hold, and the NodeID must be the one aether derives
+from the signing key. `NewCacheApplyHook` wraps a ledger cache so it refuses
+records that fail those checks, replays and floods (per-node rate and replay
+window); `SkipSignatureCheck` exists for meshes still carrying unsigned
+records and is off by default.
+
+## Use
+
+```sh
 go get github.com/bbmumford/reach
 ```
 
-**Related:** [Ledger](https://github.com/bbmumford/ledger) (record store + gossip cache) · [Whisper](https://github.com/bbmumford/whisper) (gossip engine) · [Aether](https://github.com/ORBTR/Aether) (wire protocol)
-
-> **Reach** is a self-reachability publisher for peer-to-peer meshes. Each node runs a `Publisher` that discovers its own addresses (DNS, STUN, TURN, cloud metadata, interface enumeration, peer reflection), signs the result with Ed25519, and writes it to the distributed ledger. Peers learn how to dial each other without any central directory. Paired with Whisper gossip, a freshness digest propagates mesh-wide so every peer converges within seconds of an address change.
-
-## Core capabilities
-
-- **Fingerprint-and-skip** — canonical SHA-256 over the sorted address set; re-publishes only when the address set actually changes.
-- **Adaptive cadence** — STABLE (5 min) / CHURNING (15 s) / BOOTSTRAPPING (2 s) with full-jitter + leaky-bucket cap.
-- **Hybrid Logical Clock** — monotonic ordering that survives wall-clock skew; `Epoch` bumps on restart.
-- **Ed25519 signed** — receivers verify authenticity before applying.
-- **Per-address TTL** — DNS 1h, STUN 2min, reflective 10min, static ∞; record TTL = max of per-address TTLs.
-- **Platform-aware discovery** — Fly (`FLY_PUBLIC_IP`), AWS (IMDSv2), GCP (metadata.google.internal), Kubernetes (downward API), dev (STUN + interface enum).
-- **STUN + TURN** — `pion/stun/v3` against a fleet STUN, `pion/turn/v4` relay allocation with HKDF-derived per-tenant credentials.
-- **ICE candidates** — host/srflx/relay candidates emitted alongside the flat address list (RFC 8445).
-- **Confidence scoring** — peer-echo probes mark verified addresses with `Confidence >= 60`, unverified with `< 20`.
-- **Freshness gossip** — `reach.freshness` whisper topic broadcasts a digest every 30 s; mismatch triggers a pull.
-- **Event-driven** — netlink (linux), PF_ROUTE (darwin), NotifyUnicastIpAddressChange (windows), plus suspend/resume hooks.
-- **Graceful tombstones** — on shutdown the node publishes an empty record with `Tombstone`; peers expunge immediately.
-- **Per-org encryption** — ChaCha20-Poly1305 AEAD seals private-scope addresses (e.g. Fly `fdaa:`) from non-org peers.
-- **Rate limit + replay guard** — per-NodeID publish cap; strictly-increasing HLC per Epoch.
-- **Last-good persistence** — `~/.hstles/reach.json` speeds cold-start reach publication.
-
-## Quick start
-
 ```go
-import (
-    "github.com/bbmumford/reach"
-    "github.com/bbmumford/reach/discoverer"
-)
-
 pub, err := reach.NewPublisher(reach.Config{
-    NodeID:   myNodeID,
-    Region:   "iad",
-    TenantID: myTenantID,
-    Signer:   edPrivateKey,
-    Ledger:   ledgerAppender,          // any ledger.Ledger impl
-    Whisper:  freshnessBus,             // optional — enables reach.freshness gossip
-    Provider: "fly",                    // platform detection hint
-    Discoverers: []reach.Discoverer{
-        discoverer.NewStatic(staticAddrs),
-        discoverer.NewDNS("node.example.com", 41641),
-        discoverer.NewInterface(41641),
-        discoverer.NewSTUN(discoverer.STUNConfig{
-            ServerAddrs: []string{"stun.example.com:3478"},
-            UDPPort:     41641,
-            // AuthFunc: discoverer.StaticSTUNAuth("user","realm","pw"), // optional — RFC 5389 long-term cred
-        }),
-        discoverer.NewTURN(discoverer.TURNConfig{
-            ServerAddr: "turn.example.com:3478",
-            // Pick one credential scheme:
-            // 1. Static long-term: Username + Password
-            // 2. Standard TURN REST: StandardRESTCredentials(userID, sharedSecret, ttl)
-            // 3. Custom: any CredentialFunc you supply
-            CredentialFunc: discoverer.StandardRESTCredentials(myUserID, sharedSecret, 15*time.Minute),
-        }),
-        discoverer.NewPlatform("fly", 41641),
-    },
+	NodeID:    nodeID,      // aether NodeID of signer's public key
+	Partition: partition,
+	Region:    "syd",
+	Signer:    priv,        // ed25519.PrivateKey
+	Ledger:    appender,    // anything with Append(ctx, ledger.Record) error
+	Provider:  "fly",
+	Discoverers: []reach.Discoverer{
+		discoverer.NewInterface(41641),
+		discoverer.NewSTUN(discoverer.STUNConfig{
+			ServerAddrs: []string{"stun.example.com:3478"},
+			UDPPort:     41641,
+		}),
+		discoverer.NewPlatform("fly", 41641),
+	},
+	PersistPath: filepath.Join(stateDir, "reach.json"),
 })
-if err != nil { return err }
+if err != nil {
+	return err
+}
 go pub.Run(ctx)
 ```
 
-The publisher runs its own scheduler, reacts to platform events, and publishes to the ledger — no operator intervention required. Everything is configuration-driven; the package has no baked-in server addresses or tenant IDs.
+`NotifyAddressChange` and `NotifyRoleChange` make the publisher look again
+at once, `ForcePublish` publishes now, and `CurrentAddresses`, `LastDigest`
+and `MetadataSnapshot` report what it last published. `Metadata` is a free map
+the caller fills (service name, roles, device id) and the record carries signed.
 
-## Package layout
+| package | what it holds |
+|---|---|
+| `reach` | `Publisher`, `Config`, `ReachRecord`, `Address`, `Sign`, `Verify`, deltas, group sealing, the cache hook, the prober, the freshness client |
+| `reach/discoverer` | the address sources: `Static`, `DNS`, `Interface`, `STUN`, `TURN` (static, TURN REST and HKDF-HMAC credentials), `UPnP`, `Platform` (Fly, AWS, GCP, Kubernetes, development), `Reflection` |
+| `reach/events` | network-change and power events per platform, on one `Bus` |
 
-- `reach` — public API (`Publisher`, `Config`, `ReachRecord` extensions)
-- `reach/discoverer` — pluggable address sources
-- `reach/events` — platform event hooks (netlink / PF_ROUTE / win32)
-- `reach/internal` — shared test harness
+## Dependencies
 
-Consumers that only read records import `github.com/bbmumford/ledger` directly — this package is publisher-only and pulls in `pion/stun`, `pion/turn`, `pion/ice` for discovery.
+- `github.com/ORBTR/aether`: `NewNodeID`, to bind a record's NodeID to its key,
+  and its capability flags.
+- `github.com/bbmumford/ledger`: the record and ledger types reach writes
+  (`Record`, `ReachRecord`, `ReachAddress`) and `ledger/storage`.
+- `github.com/pion/stun/v3`, `github.com/pion/turn/v4` and
+  `github.com/pion/ice/v3`, for STUN, TURN and ICE candidates.
+- `golang.org/x/crypto` (ChaCha20-Poly1305, HKDF) and `golang.org/x/sys`
+  (the platform event sources).
 
-## License
+## Used by
 
-MIT — see [LICENSE](LICENSE).
+Importers in the ORBTR estate:
+
+- `github.com/bbmumford/loom/node`: the platform mesh node publishes its
+  addresses with reach.
+- `github.com/ORBTR/agent/internal/core/wire` (with `discoverer` and
+  `events`) and `github.com/ORBTR/agent/systempart`: the device agent.
+
+## Platforms and build
+
+Pure Go, no cgo. `events` has a source per platform selected by build
+constraints (`linux`, `darwin`, `windows`, and a poller for every other
+system). The module's `go` directive is 1.25.0.
+
+## Licence
+
+MIT. Copyright (c) 2026 Brandon Miller-Mumford. The full text is in
+[LICENSE](LICENSE).
+
+## Contributing
+
+[AGENTS.md](AGENTS.md) holds the repository's two rules, for people and coding
+agents alike: no temporary documents in the repository, and conventional commit
+messages that stand on their own. [CLAUDE.md](CLAUDE.md) imports it for Claude
+Code.
