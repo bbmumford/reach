@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	lad "github.com/bbmumford/ledger"
 )
@@ -65,7 +66,7 @@ func NewCacheApplyHook(cfg CacheHookConfig) *CacheApplyHook {
 	}
 	return &CacheApplyHook{
 		cfg:    cfg,
-		replay: NewReplayGuard(0),
+		replay: NewReplayGuard(time.Duration(cfg.ReplayWindow) * time.Second),
 		rate:   NewPerNodeRateLimiter(cfg.RatePerMin, 0),
 	}
 }
