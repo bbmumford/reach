@@ -3,26 +3,36 @@
 package reach
 
 import (
-	"sync"
 	"time"
+
+	"github.com/bbmumford/ratelimit"
+)
+
+// MaxRateLimitedNodes is the most NodeIDs a PerNodeRateLimiter holds a budget
+// for at once. A record's NodeID is chosen by whoever signs it, so without a
+// bound every new key would add an entry for the process's life.
+const MaxRateLimitedNodes = 16384
+
+// perNodeLimit names the limiter's one limit; nodeDimension is the dimension
+// its buckets are keyed by.
+const (
+	perNodeLimit  = "reach.node"
+	nodeDimension = "node"
 )
 
 // PerNodeRateLimiter caps the number of reach records accepted per NodeID
-// per minute. Applied on the READ side (in a ledger cache hook) so a
-// compromised or buggy node can't hot-loop churn into the mesh.
+// per window. Applied on the READ side (in a ledger cache hook) so a
+// compromised or buggy node can't hot-loop churn into the mesh. Each NodeID
+// has a token bucket of cap records refilled over the window, held by a
+// ratelimit.RateLimiter whose buckets idle for two windows are swept and whose
+// map holds at most MaxRateLimitedNodes, so the NodeIDs a peer mints cannot
+// grow it.
 type PerNodeRateLimiter struct {
-	mu    sync.Mutex
-	state map[string]*rateEntry
-	cap   int           // max records per window
-	win   time.Duration // rolling window size (typically 1 minute)
-}
-
-type rateEntry struct {
-	timestamps []time.Time
+	rl *ratelimit.RateLimiter
 }
 
 // NewPerNodeRateLimiter creates a limiter with the given per-window cap.
-// Defaults: cap=60, win=1min (matches plan §5.30).
+// Defaults: cap=60, win=1min.
 func NewPerNodeRateLimiter(cap int, win time.Duration) *PerNodeRateLimiter {
 	if cap <= 0 {
 		cap = 60
@@ -30,45 +40,26 @@ func NewPerNodeRateLimiter(cap int, win time.Duration) *PerNodeRateLimiter {
 	if win <= 0 {
 		win = time.Minute
 	}
-	return &PerNodeRateLimiter{
-		state: make(map[string]*rateEntry),
-		cap:   cap,
-		win:   win,
-	}
+	rl := ratelimit.NewRateLimiterWithBounds(2*win, MaxRateLimitedNodes)
+	rl.Register(perNodeLimit, &ratelimit.RateLimitConfig{
+		Mode:       ratelimit.ModeTokenBucket,
+		Capacity:   cap,
+		RefillRate: cap,
+		Interval:   win,
+		Dimensions: []string{nodeDimension},
+	})
+	return &PerNodeRateLimiter{rl: rl}
 }
 
 // Allow returns true if accepting another record from nodeID is within the
-// rate budget. Updates internal state if allowed.
+// rate budget, spending one record of it. It refuses whenever the limiter
+// cannot say yes.
 func (l *PerNodeRateLimiter) Allow(nodeID string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	cutoff := now.Add(-l.win)
-
-	e := l.state[nodeID]
-	if e == nil {
-		e = &rateEntry{}
-		l.state[nodeID] = e
-	}
-	// Prune stale timestamps.
-	kept := e.timestamps[:0]
-	for _, t := range e.timestamps {
-		if t.After(cutoff) {
-			kept = append(kept, t)
-		}
-	}
-	e.timestamps = kept
-
-	if len(e.timestamps) >= l.cap {
-		return false
-	}
-	e.timestamps = append(e.timestamps, now)
-	return true
+	allowed, _, _, err := l.rl.Protect(perNodeLimit, &ratelimit.RateLimitContext{Dimensions: map[string]string{nodeDimension: nodeID}})
+	return err == nil && allowed
 }
 
 // Size returns the number of tracked nodes (for metrics / diagnostics).
 func (l *PerNodeRateLimiter) Size() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.state)
+	return l.rl.BucketCount()
 }

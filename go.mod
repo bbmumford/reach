@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/ORBTR/aether v0.0.117
 	github.com/bbmumford/ledger v0.0.6
+	github.com/bbmumford/ratelimit v0.0.0
 	github.com/pion/ice/v3 v3.0.16
 	github.com/pion/stun/v3 v3.1.1
 	github.com/pion/turn/v4 v4.1.4

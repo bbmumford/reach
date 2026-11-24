@@ -7,3 +7,7 @@ go 1.25.0
 use .
 
 use ../ledger
+
+// ratelimit has no release, so the v0.0.0 go.mod requires resolves to the
+// package tree beside this one.
+replace github.com/bbmumford/ratelimit => ../ratelimit
