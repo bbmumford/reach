@@ -76,6 +76,11 @@ func OpenGroup(section *EncryptedSection, key GroupKey) ([]Address, error) {
 	if err != nil {
 		return nil, err
 	}
+	// aead.Open panics on a nonce of any other length, and the nonce is the
+	// record's own bytes, so a section is refused before Open sees one.
+	if len(section.Nonce) != aead.NonceSize() {
+		return nil, ErrGroupKeyMismatch
+	}
 	plaintext, err := aead.Open(nil, section.Nonce, section.Ciphertext, []byte(key.ID))
 	if err != nil {
 		return nil, ErrGroupKeyMismatch
