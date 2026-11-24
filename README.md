@@ -25,9 +25,11 @@ How a publisher behaves:
 - **Private addresses.** With a `GroupKey`, private-scope addresses are sealed
   with ChaCha20-Poly1305 (`SealGroup`) so only holders of the key can read them
   (`OpenGroup`).
-- **Verified addresses.** A `Prober` asks peers to dial an address back
-  (`ServeVerifyHTTP` answers such requests) and raises the address's
-  confidence when peers in enough regions reach it.
+- **Verified addresses.** A `Prober` asks peers to dial an address back and
+  raises the address's confidence when peers in enough regions reach it.
+  `ServeVerifyHTTP` answers such requests only for callers its authorize
+  function admits (nil admits none), and `DefaultVerifier` dials only a UDP or
+  TCP target at a public unicast IP literal.
 - **Network changes.** The `events` package reports address and power changes
   (netlink on Linux, PF_ROUTE on macOS, `NotifyUnicastIpAddressChange` on
   Windows, a poller elsewhere, and a captive-portal check), and the publisher
@@ -40,8 +42,8 @@ How a publisher behaves:
 Receivers check records with `Verify` (and `VerifyDelta`): a record must be
 signed, the signature must hold, and the NodeID must be the one aether derives
 from the signing key. `NewCacheApplyHook` wraps a ledger cache so it refuses
-records that fail those checks, replays and floods (per-node rate and replay
-window); `SkipSignatureCheck` exists for meshes still carrying unsigned
+records that fail those checks, replays and floods (a per-node rate held for a bounded number of NodeIDs, and a
+replay window); `SkipSignatureCheck` exists for meshes still carrying unsigned
 records and is off by default.
 
 ## Use
@@ -91,6 +93,8 @@ the caller fills (service name, roles, device id) and the record carries signed.
   and its capability flags.
 - `github.com/bbmumford/ledger`: the record and ledger types reach writes
   (`Record`, `ReachRecord`, `ReachAddress`) and `ledger/storage`.
+- `github.com/bbmumford/ratelimit`: the per-node publish budget
+  (`PerNodeRateLimiter`).
 - `github.com/pion/stun/v3`, `github.com/pion/turn/v4` and
   `github.com/pion/ice/v3`, for STUN, TURN and ICE candidates.
 - `golang.org/x/crypto` (ChaCha20-Poly1305, HKDF) and `golang.org/x/sys`
