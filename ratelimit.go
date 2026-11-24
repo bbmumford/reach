@@ -24,9 +24,12 @@ const (
 // per window. Applied on the READ side (in a ledger cache hook) so a
 // compromised or buggy node can't hot-loop churn into the mesh. Each NodeID
 // has a token bucket of cap records refilled over the window, held by a
-// ratelimit.RateLimiter whose buckets idle for two windows are swept and whose
-// map holds at most MaxRateLimitedNodes, so the NodeIDs a peer mints cannot
-// grow it.
+// ratelimit.RateLimiter whose map holds at most MaxRateLimitedNodes, so the
+// NodeIDs a peer mints cannot grow it. The limiter drops a bucket only once it
+// is back at capacity (swept after two idle windows, or to make room), so a
+// flood of minted NodeIDs cannot reset the budget of a node it tracks; while
+// the map is full of nodes still below their budget, Allow refuses a NodeID
+// it does not yet track.
 type PerNodeRateLimiter struct {
 	rl *ratelimit.RateLimiter
 }
