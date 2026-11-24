@@ -3,12 +3,18 @@
 package reach
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 
 	lad "github.com/bbmumford/ledger"
 )
+
+// ErrDeltaNodeMismatch is returned by LadCacheDeltaApplier for a delta that is
+// not by the node of the base it would change: its NodeID, partition or signing
+// key differs from the base's.
+var ErrDeltaNodeMismatch = errors.New("reach: delta applier: delta is not by its base's node")
 
 // LadCacheDeltaApplier is a cache.ReachDeltaApplier that reconstructs a
 // full, lad-cacheable ReachRecord body from the previous full-snapshot
@@ -43,6 +49,12 @@ import (
 //                        check the base full snapshot, not the reconstructed
 //                        derivative.
 //
+// A delta is applied only when it is its base's node's own: VerifyDelta must
+// pass (a signature by the key its NodeID derives from), and its NodeID,
+// partition and key must equal the base's, or ErrDeltaNodeMismatch. The base
+// digest is public, so without these any key could re-point another node's
+// addresses with a delta naming that digest.
+//
 // If delta.BaseDigest doesn't match Digest(base.AddressSet), ApplyDelta
 // returns ErrDeltaBaseMismatch and this function returns the error so the
 // cache can skip the apply (the next full snapshot will resync).
@@ -67,6 +79,12 @@ func LadCacheDeltaApplier(baseBody, deltaBody []byte) ([]byte, error) {
 		return nil, fmt.Errorf("reach: decode delta: %w", err)
 	}
 	delta := *deltaPtr
+	if err := VerifyDelta(delta); err != nil {
+		return nil, fmt.Errorf("reach: delta applier: %w", err)
+	}
+	if delta.NodeID != base.NodeID || delta.Partition != base.Partition || !bytes.Equal(delta.PubKey, base.PubKey) {
+		return nil, ErrDeltaNodeMismatch
+	}
 
 	// Skip mismatched deltas — ApplyDelta already enforces, but call it
 	// out explicitly for the caller.

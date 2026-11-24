@@ -4,6 +4,7 @@ package reach
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,9 +26,11 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 		{Host: "1.1.1.1", Port: 9000, Proto: "udp", Scope: ScopePublic, Source: SrcSTUN, ExpiresAt: time.Now().Add(time.Hour)},
 		{Host: "2.2.2.2", Port: 9000, Proto: "udp", Scope: ScopePublic, Source: SrcSTUN, ExpiresAt: time.Now().Add(time.Hour)},
 	}
+	alicePub, alicePriv := seededKey(0xa1)
+	alice := meshNodeID(alicePub)
 	base := ReachRecord{
 		Partition:     "",
-		NodeID:        "vl1_alice",
+		NodeID:        alice,
 		Region:        "iad",
 		Addresses:     []lad.ReachAddress{{Host: "1.1.1.1", Port: 9000, Proto: "udp", Scope: "public"}, {Host: "2.2.2.2", Port: 9000, Proto: "udp", Scope: "public"}},
 		AddressSet:    baseAddrs,
@@ -38,6 +41,7 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 			"region":       "iad",
 		},
 	}
+	Sign(&base, alicePriv)
 	baseBody, err := json.Marshal(&base)
 	if err != nil {
 		t.Fatalf("marshal base: %v", err)
@@ -47,7 +51,7 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 	baseDigest := Digest(baseAddrs)
 	newAddr := Address{Host: "3.3.3.3", Port: 9000, Proto: "udp", Scope: ScopePublic, Source: SrcSTUN, ExpiresAt: time.Now().Add(time.Hour)}
 	delta := DeltaRecord{
-		NodeID:        "vl1_alice",
+		NodeID:        alice,
 		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
 		BaseDigest:    baseDigest,
 		UpdatedAt:     time.Now().Add(time.Second),
@@ -56,6 +60,7 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 			{Op: DeltaAdd, AddrKey: newAddr.Key(), Addr: &newAddr},
 		},
 	}
+	signDelta(&delta, alicePriv)
 	deltaBody, err := MarshalDelta(&delta)
 	if err != nil {
 		t.Fatalf("marshal delta: %v", err)
@@ -99,23 +104,26 @@ func TestLadCacheDeltaApplier_EndToEnd(t *testing.T) {
 // BaseDigest doesn't match the stored base, the applier returns an error
 // (cache will skip the apply and wait for next full snapshot).
 func TestLadCacheDeltaApplier_BaseMismatch(t *testing.T) {
+	alicePub, alicePriv := seededKey(0xa1)
 	base := ReachRecord{
-		NodeID:     "vl1_alice",
+		NodeID:     meshNodeID(alicePub),
 		AddressSet: []Address{{Host: "1.1.1.1", Port: 9000, Proto: "udp", Scope: ScopePublic, Source: SrcSTUN}},
 	}
+	Sign(&base, alicePriv)
 	baseBody, _ := json.Marshal(&base)
 
 	delta := DeltaRecord{
-		NodeID:        "vl1_alice",
+		NodeID:        base.NodeID,
 		SchemaVersion: SchemaVersion | DeltaSchemaFlag,
 		BaseDigest:    "digest-of-some-other-base",
 		Ops:           []DeltaEntry{{Op: DeltaRemove, AddrKey: "udp|foo|1|public|stun"}},
 	}
+	signDelta(&delta, alicePriv)
 	deltaBody, _ := MarshalDelta(&delta)
 
 	_, err := LadCacheDeltaApplier(baseBody, deltaBody)
-	if err == nil {
-		t.Fatalf("expected base-mismatch error, got nil")
+	if !errors.Is(err, ErrDeltaBaseMismatch) {
+		t.Fatalf("err = %v, want ErrDeltaBaseMismatch", err)
 	}
 }
 
