@@ -8,10 +8,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"time"
 )
+
+// maxVerifyBodyBytes bounds a VerifyRequest a handler reads and a
+// VerifyResponse a transport reads: each is a nonce, an address and a few
+// fields, so no honest one comes near it.
+const maxVerifyBodyBytes = 4 << 10
 
 // NoOpVerifyTransport is a transport that never sends a request.
 // Useful for tests, dev scenarios, or nodes that don't support probing peers.
@@ -98,7 +106,7 @@ func (t *HTTPVerifyTransport) Ask(ctx context.Context, nodeID string, req Verify
 	}
 
 	var out VerifyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxVerifyBodyBytes)).Decode(&out); err != nil {
 		return VerifyResponse{}, err
 	}
 	return out, nil
@@ -117,15 +125,23 @@ type ReachVerifier interface {
 }
 
 // ServeVerifyHTTP returns an http.Handler that wires an incoming probe to v.
-func ServeVerifyHTTP(v ReachVerifier, observerRegion, observerNode string) http.Handler {
+// Every request must pass authorize, the mount's proof that the caller is a
+// mesh peer it serves: a verifier dials what a request names, so a handler open
+// to any caller would probe the observer's network for anyone. A nil authorize
+// admits no request. A request body past maxVerifyBodyBytes is refused unread.
+func ServeVerifyHTTP(v ReachVerifier, observerRegion, observerNode string, authorize func(*http.Request) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if authorize == nil || authorize(r) != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		var req VerifyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxVerifyBodyBytes)).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		rsp := v.Verify(r.Context(), req, observerRegion, observerNode)
@@ -135,11 +151,45 @@ func ServeVerifyHTTP(v ReachVerifier, observerRegion, observerNode string) http.
 }
 
 // DefaultVerifier is a ReachVerifier that dials the requested target address
-// over UDP and reports whether the dial succeeded. Sufficient for basic
+// over UDP or TCP and reports whether the dial succeeded. Sufficient for basic
 // reachability probing; the consumer can implement a richer verifier that
 // does a real handshake or NAT-type detection.
+//
+// It dials only a target probeTarget admits, a public unicast IP literal on a
+// UDP or TCP port, and its answer carries no dial error text, so a request can
+// make it reach neither the observer's own host, its private network nor a
+// cloud metadata address, nor learn more than reachable or not.
 type DefaultVerifier struct {
 	Timeout time.Duration
+}
+
+// Reasons DefaultVerifier gives for a target it does not reach.
+const (
+	VerifyReasonRefusedTarget = "refused target"
+	VerifyReasonUnreachable   = "unreachable"
+)
+
+// probeTarget returns the dial network and address for a, or false when a is
+// not a target DefaultVerifier dials: the protocol must be udp or tcp, the host
+// an IP literal (a name could resolve anywhere), the port in 1-65535, and the
+// address public unicast, so not loopback, link-local (169.254.169.254 among
+// them), private, multicast or unspecified.
+func probeTarget(a Address) (network, addr string, ok bool) {
+	if a.Proto != "udp" && a.Proto != "tcp" {
+		return "", "", false
+	}
+	ip, err := netip.ParseAddr(a.Host)
+	if err != nil || ip.Zone() != "" {
+		return "", "", false
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return "", "", false
+	}
+	if a.Port == 0 {
+		return "", "", false
+	}
+	return a.Proto, net.JoinHostPort(ip.String(), strconv.Itoa(int(a.Port))), true
 }
 
 // Verify performs the dial-probe and returns the result.
@@ -151,10 +201,18 @@ func (v DefaultVerifier) Verify(ctx context.Context, req VerifyRequest, observer
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(req.TargetAddr.Host, fmt.Sprintf("%d", req.TargetAddr.Port))
+	network, addr, ok := probeTarget(req.TargetAddr)
+	if !ok {
+		return VerifyResponse{
+			Nonce:          req.Nonce,
+			ObserverNode:   observerNode,
+			ObserverRegion: observerRegion,
+			Reason:         VerifyReasonRefusedTarget,
+		}
+	}
 	start := time.Now()
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, req.TargetAddr.Proto, addr)
+	conn, err := d.DialContext(ctx, network, addr)
 	rtt := time.Since(start)
 
 	if err != nil {
@@ -163,7 +221,7 @@ func (v DefaultVerifier) Verify(ctx context.Context, req VerifyRequest, observer
 			Reachable:      false,
 			ObserverNode:   observerNode,
 			ObserverRegion: observerRegion,
-			Reason:         err.Error(),
+			Reason:         VerifyReasonUnreachable,
 		}
 	}
 	_ = conn.Close()
