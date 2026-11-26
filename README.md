@@ -18,7 +18,10 @@ How a publisher behaves:
   profile), with full jitter and at most `MaxPublishesPerMin` (default 10).
 - **Ordering.** Every record carries a hybrid logical clock stamp and an
   `Epoch` seeded from the clock at start, so a restarted node's records order
-  after its earlier ones.
+  after its earlier ones. The stamp comes from swarm's `HLC`: `Wall` is its
+  millisecond wall in microseconds and `Logical` its 16-bit counter, and a
+  received stamp more than swarm's forward-skew budget (10 minutes) ahead of
+  this node does not move the clock.
 - **Expiry.** Each address has a time to live by source (`DefaultTTLs`); the
   record expires with its longest-lived address. On shutdown the publisher
   writes a tombstone so peers drop it at once.
@@ -95,6 +98,8 @@ the caller fills (service name, roles, device id) and the record carries signed.
   (`Record`, `ReachRecord`, `ReachAddress`) and `ledger/storage`.
 - `github.com/bbmumford/ratelimit`: the per-node publish budget
   (`PerNodeRateLimiter`).
+- `github.com/bbmumford/swarm`: `HLC`, the hybrid logical clock `Clock`
+  stamps records from.
 - `github.com/pion/stun/v3`, `github.com/pion/turn/v4` and
   `github.com/pion/ice/v3`, for STUN, TURN and ICE candidates.
 - `golang.org/x/crypto` (ChaCha20-Poly1305, HKDF) and `golang.org/x/sys`

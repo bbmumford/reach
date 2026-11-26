@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bbmumford/swarm"
 )
 
 // HLC is a Hybrid Logical Clock (Kulkarni et al., 2014).
@@ -17,6 +19,11 @@ import (
 // HLC differs from the Lamport clock already on ledger.Record in that it
 // remains close to real time — useful for operators inspecting records — and
 // it gives strictly-increasing ordering without cross-node coordination.
+//
+// HLC is the stamp's wire form: every signed ReachRecord and DeltaRecord
+// carries it under these JSON keys. Clock fills it from swarm's HLC, so Wall
+// holds whole milliseconds expressed in microseconds and Logical swarm's
+// 16-bit counter.
 type HLC struct {
 	Wall    int64  `json:"w"` // unix micros
 	Logical uint32 `json:"l"`
@@ -70,20 +77,27 @@ func (h HLC) String() string {
 
 // Clock produces monotonically-increasing HLC timestamps for a single node.
 // Safe for concurrent use.
+//
+// The stamps come from a swarm.HLC: Tick takes the clock's next stamp and
+// writes its millisecond wall (in microseconds) and counter into the wire
+// HLC, and Observe folds a received stamp into it. swarm's rules therefore
+// hold here too: a counter full within one millisecond carries into the next
+// one, and a remote stamp further ahead of this node's wall than swarm's
+// forward-skew budget does not move the clock.
 type Clock struct {
-	mu     sync.Mutex
 	nodeID string
-	last   HLC
-	now    func() time.Time
+	hlc    *swarm.HLC
+
+	// mu makes a Tick's stamp and its record in last one step, so last is
+	// always the greatest stamp Tick has returned.
+	mu   sync.Mutex
+	last HLC
 }
 
 // NewClock creates an HLC clock for the given node.
 // Pass nil for now to use time.Now.
 func NewClock(nodeID string, now func() time.Time) *Clock {
-	if now == nil {
-		now = time.Now
-	}
-	return &Clock{nodeID: nodeID, now: now}
+	return &Clock{nodeID: nodeID, hlc: swarm.NewHLCWithNow(now)}
 }
 
 // Tick produces the next HLC timestamp strictly greater than the previous.
@@ -91,30 +105,16 @@ func NewClock(nodeID string, now func() time.Time) *Clock {
 func (c *Clock) Tick() HLC {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	wall := c.now().UTC().UnixMicro()
-	if wall <= c.last.Wall {
-		// Wall didn't advance — bump logical.
-		c.last = HLC{
-			Wall:    c.last.Wall,
-			Logical: c.last.Logical + 1,
-			NodeID:  c.nodeID,
-		}
-		return c.last
-	}
-	c.last = HLC{Wall: wall, Logical: 0, NodeID: c.nodeID}
+	wall, counter := swarm.Decompose(c.hlc.Now())
+	c.last = HLC{Wall: int64(wall) * 1000, Logical: uint32(counter), NodeID: c.nodeID}
 	return c.last
 }
 
 // Observe incorporates a remote HLC into the local clock state.
 // Use this on receipt of any ReachRecord so local ticks always outrun what
-// the network has seen.
+// the network has seen, within swarm's forward-skew budget.
 func (c *Clock) Observe(remote HLC) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if remote.Compare(c.last) > 0 {
-		c.last = HLC{Wall: remote.Wall, Logical: remote.Logical, NodeID: c.nodeID}
-	}
+	c.hlc.Observe(stampOf(remote))
 }
 
 // Last returns the most recent HLC produced by Tick (may be zero).
@@ -122,4 +122,23 @@ func (c *Clock) Last() HLC {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.last
+}
+
+// stampOf converts a wire HLC to swarm's packed stamp for Observe. A Wall
+// between two milliseconds (a stamp a clock issued at microsecond resolution)
+// is taken as the next millisecond, and a Logical above the 16-bit counter as
+// a full counter, so the Tick after Observe still compares greater than the
+// remote: Compare orders by Wall first, then Logical.
+func stampOf(h HLC) uint64 {
+	if h.Wall <= 0 {
+		return 0
+	}
+	ms, counter := uint64(h.Wall/1000), h.Logical
+	if h.Wall%1000 != 0 {
+		ms, counter = ms+1, 0
+	}
+	if counter > 0xFFFF {
+		counter = 0xFFFF
+	}
+	return swarm.Pack(ms, uint16(counter))
 }

@@ -1,4 +1,4 @@
-go 1.25.0
+go 1.27.4
 
 // Local dev bridge: reach/go.mod pins ledger v0.0.6, but publisher.go writes
 // ledger.Record.Partition, which exists only in the unpublished ../ledger
@@ -7,6 +7,12 @@ go 1.25.0
 use .
 
 use ../ledger
+
+// Local dev bridge: reach/go.mod pins swarm v0.0.9, but Clock builds on
+// swarm.NewHLCWithNow and swarm.Pack, which exist only in the unpublished
+// ../swarm working tree. Resolve swarm locally until it is published and
+// reach bumps its pin.
+use ../swarm
 
 // ratelimit has no release, so the v0.0.0 go.mod requires resolves to the
 // package tree beside this one.
