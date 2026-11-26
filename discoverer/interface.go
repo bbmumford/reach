@@ -4,6 +4,7 @@ package discoverer
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"time"
@@ -171,3 +172,9 @@ func isRoutablePrivate(ip net.IP) bool {
 	}
 	return true
 }
+
+// closeAfterUse closes what a probe opened (a socket, a STUN client, an HTTP
+// response body) once the probe has read what it needs or given up: the
+// result the probe returns was decided before the close, so its error is
+// dropped.
+func closeAfterUse(c io.Closer) { _ = c.Close() }

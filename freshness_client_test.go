@@ -54,7 +54,7 @@ func (b *inMemoryBus) SubscribeFreshness(h func([]byte)) func() {
 
 // mapLookup implements ReachRecordLookup over an in-memory map.
 type mapLookup struct {
-	mu    sync.Mutex
+	mu     sync.Mutex
 	bodies map[string][]byte
 }
 
@@ -87,7 +87,9 @@ func TestFreshnessClient_AnnounceTriggersRequestOnCacheMiss(t *testing.T) {
 
 	fc := NewFreshnessClient(bus, cache, nil, "receiver", nil)
 	fc.SetCooldown(100 * time.Millisecond)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	// Count request broadcasts.
@@ -143,7 +145,9 @@ func TestFreshnessClient_AnnounceSuppressedWhenCacheHasMatchingDigest(t *testing
 
 	fc := NewFreshnessClient(bus, cache, nil, "receiver", nil)
 	fc.SetCooldown(100 * time.Millisecond)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	var requests int32
@@ -183,7 +187,9 @@ func TestFreshnessClient_RequestCooldown(t *testing.T) {
 
 	fc := NewFreshnessClient(bus, cache, nil, "receiver", nil)
 	fc.SetCooldown(500 * time.Millisecond)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	var requests int32
@@ -248,7 +254,9 @@ func TestFreshnessClient_InboundRequestTriggersForcePublish(t *testing.T) {
 	}
 
 	fc := NewFreshnessClient(bus, cache, pub, "self", nil)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	// Peer sends a request for our NodeID.
@@ -282,7 +290,9 @@ func TestFreshnessClient_InboundRequestIgnoredIfNotForUs(t *testing.T) {
 	}
 
 	fc := NewFreshnessClient(bus, cache, pub, "self", nil)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	req := freshnessPayload{
@@ -313,7 +323,9 @@ func TestFreshnessClient_OwnMessagesIgnored(t *testing.T) {
 	}
 
 	fc := NewFreshnessClient(bus, cache, pub, "self", nil)
-	fc.Start(context.Background())
+	if err := fc.Start(context.Background()); err != nil {
+		t.Fatalf("fc.Start: %v", err)
+	}
 	defer fc.Stop()
 
 	// Our own request (e.g. echoed back by broadcast).

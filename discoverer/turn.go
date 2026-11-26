@@ -292,19 +292,19 @@ func (t *TURN) allocate(ctx context.Context) (*allocation, error) {
 		Realm:          t.realm,
 	})
 	if err != nil {
-		conn.Close()
+		closeAfterUse(conn)
 		return nil, fmt.Errorf("turn client: %w", err)
 	}
 	if err := client.Listen(); err != nil {
 		client.Close()
-		conn.Close()
+		closeAfterUse(conn)
 		return nil, fmt.Errorf("turn listen: %w", err)
 	}
 
 	relayConn, err := client.Allocate()
 	if err != nil {
 		client.Close()
-		conn.Close()
+		closeAfterUse(conn)
 		return nil, fmt.Errorf("turn allocate: %w", err)
 	}
 

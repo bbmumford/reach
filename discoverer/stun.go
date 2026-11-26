@@ -160,10 +160,11 @@ func (s *STUN) Discover(ctx context.Context) ([]reach.Address, error) {
 	// Publish with Capabilities=0, low confidence and a tag so the publisher
 	// can downgrade — but do not fully suppress: some peers may still land
 	// via hole-punching if we coordinate via TURN.
-	if natType == NATSymmetric {
+	switch natType {
+	case NATSymmetric:
 		first.Confidence = 15
 		first.Tags = append(first.Tags, "nat:symmetric")
-	} else if natType == NATOpen {
+	case NATOpen:
 		first.Confidence = 50
 		first.Tags = append(first.Tags, "nat:open")
 	}
@@ -188,13 +189,13 @@ func (s *STUN) probe(ctx context.Context, serverAddr string, auth STUNAuth) (*re
 	if err != nil {
 		return nil, fmt.Errorf("stun dial %s: %w", serverAddr, err)
 	}
-	defer conn.Close()
+	defer closeAfterUse(conn)
 
 	client, err := stun.NewClient(conn)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer closeAfterUse(client)
 
 	// Build the request — anonymous by default, add integrity attributes when
 	// credentials are supplied.

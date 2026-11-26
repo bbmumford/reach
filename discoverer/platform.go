@@ -151,7 +151,7 @@ func (p *Platform) awsIMDSToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeAfterUse(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", nil
 	}
@@ -245,7 +245,7 @@ func (p *Platform) imdsGet(ctx context.Context, url string, headers map[string]s
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeAfterUse(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return "", nil
 	}

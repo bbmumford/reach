@@ -93,7 +93,7 @@ func (u *UPnP) discoverIGDControlURL(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer closeAfterUse(conn)
 
 	msearch := strings.Join([]string{
 		"M-SEARCH * HTTP/1.1",
@@ -156,7 +156,7 @@ func (u *UPnP) findWANIPConnectionControlURL(ctx context.Context, descURL string
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeAfterUse(resp.Body)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -216,7 +216,7 @@ func (u *UPnP) getExternalIP(ctx context.Context, controlURL string) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeAfterUse(resp.Body)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -262,7 +262,7 @@ func (u *UPnP) addPortMapping(ctx context.Context, controlURL string, port uint1
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer closeAfterUse(resp.Body)
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }

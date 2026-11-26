@@ -100,7 +100,9 @@ func (t *HTTPVerifyTransport) Ask(ctx context.Context, nodeID string, req Verify
 	if err != nil {
 		return VerifyResponse{}, err
 	}
-	defer resp.Body.Close()
+	// The answer is decoded or refused before the close; a failed close of
+	// the body changes neither, so its error is dropped.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return VerifyResponse{}, fmt.Errorf("reach: verify HTTP %d from %s", resp.StatusCode, nodeID)
 	}

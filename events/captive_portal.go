@@ -101,7 +101,9 @@ func (s *CaptivePortalSource) probe(ctx context.Context, bus *Bus) {
 		s.transition(bus, captivePresent, "network_error: "+err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	// The state is decided from the status and the first 1 KiB of the body;
+	// a failed close of the body changes neither, so its error is dropped.
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	switch {

@@ -59,7 +59,11 @@ func TestHookedLedgerReportsTheInnerLedgersClose(t *testing.T) {
 // must read as ErrStreamOverflow, not as a close or as no reason.
 func TestHookedLedgerReportsTheInnerLedgersOverflow(t *testing.T) {
 	inner := storage.NewMemoryLedger(storage.MemoryLedgerConfig{})
-	defer inner.Close()
+	defer func() {
+		if err := inner.Close(); err != nil {
+			t.Errorf("inner.Close: %v", err)
+		}
+	}()
 	er, ok := NewCacheApplyHook(CacheHookConfig{}).Wrap(inner).(lad.EndReportingLedger)
 	if !ok {
 		t.Fatal("the hooked ledger does not report why its streams end")
@@ -121,7 +125,11 @@ func TestHookedLedgerOverAPlainLedgerReportsNoReason(t *testing.T) {
 // topic's records arrive.
 func TestHookedLedgerStreamWithEndKeepsTheCallersContextAndTopics(t *testing.T) {
 	inner := storage.NewMemoryLedger(storage.MemoryLedgerConfig{})
-	defer inner.Close()
+	defer func() {
+		if err := inner.Close(); err != nil {
+			t.Errorf("inner.Close: %v", err)
+		}
+	}()
 	er, ok := NewCacheApplyHook(CacheHookConfig{}).Wrap(inner).(lad.EndReportingLedger)
 	if !ok {
 		t.Fatal("the hooked ledger does not report why its streams end")

@@ -44,7 +44,9 @@ func NewPerNodeRateLimiter(cap int, win time.Duration) *PerNodeRateLimiter {
 		win = time.Minute
 	}
 	rl := ratelimit.NewRateLimiterWithBounds(2*win, MaxRateLimitedNodes)
-	rl.Register(perNodeLimit, &ratelimit.RateLimitConfig{
+	// Register refuses only a nil config or an interval that is not positive,
+	// and win is positive here, so its result is dropped.
+	_ = rl.Register(perNodeLimit, &ratelimit.RateLimitConfig{
 		Mode:       ratelimit.ModeTokenBucket,
 		Capacity:   cap,
 		RefillRate: cap,

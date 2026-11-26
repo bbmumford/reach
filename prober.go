@@ -114,6 +114,9 @@ func (p *Prober) Verify(ctx context.Context, addr Address, peers []PeerInfo) Add
 		rttByRegion      = map[string]time.Duration{}
 		observed         int
 	)
+	// The probe window ending stops the collection; responses after it are
+	// not counted.
+collect:
 	for i := 0; i < len(peers); i++ {
 		select {
 		case r := <-resCh:
@@ -131,7 +134,7 @@ func (p *Prober) Verify(ctx context.Context, addr Address, peers []PeerInfo) Add
 				}
 			}
 		case <-probeCtx.Done():
-			break
+			break collect
 		}
 	}
 

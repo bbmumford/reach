@@ -64,7 +64,11 @@ func TestDefaultVerifierDialsOnlyAPublicAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("ln.Close: %v", err)
+		}
+	}()
 	accepted := make(chan struct{}, 8)
 	go func() {
 		for {
@@ -73,7 +77,9 @@ func TestDefaultVerifierDialsOnlyAPublicAddress(t *testing.T) {
 				return
 			}
 			accepted <- struct{}{}
-			c.Close()
+			if err := c.Close(); err != nil {
+				t.Errorf("c.Close: %v", err)
+			}
 		}
 	}()
 	port := uint16(ln.Addr().(*net.TCPAddr).Port)
