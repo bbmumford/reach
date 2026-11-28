@@ -3,7 +3,7 @@
 package reach
 
 import (
-	"github.com/pion/ice/v3"
+	"github.com/pion/ice/v4"
 )
 
 // BuildICECandidates converts a slice of reach.Address values into RFC 8445
@@ -11,10 +11,10 @@ import (
 //
 // The mapping is:
 //
-//   Scope=private, Source=interface | k8s-pod  → host candidate
-//   Scope=public,  Source=stun                 → server-reflexive
-//   Scope=public,  Source=turn                 → relay
-//   Scope=public,  Source=dns | env | imds     → host candidate (dedicated IP)
+//	Scope=private, Source=interface | k8s-pod  → host candidate
+//	Scope=public,  Source=stun                 → server-reflexive
+//	Scope=public,  Source=turn                 → relay
+//	Scope=public,  Source=dns | env | imds     → host candidate (dedicated IP)
 //
 // Unmappable entries are skipped silently. Returns marshaled SDP candidate
 // strings (empty slice when nothing maps — which is fine for non-ICE peers).
@@ -72,6 +72,9 @@ func BuildICECandidates(addrs []Address) []string {
 				Foundation: foundation,
 				RelAddr:    "0.0.0.0",
 				RelPort:    0,
+				// The TURN discoverer allocates its relays over UDP, and a
+				// relay line's priority ranks the transport to the relay.
+				RelayProtocol: "udp",
 			})
 		}
 		if err != nil || cand == nil {
