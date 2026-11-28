@@ -88,12 +88,13 @@ the caller fills (service name, roles, device id) and the record carries signed.
 |---|---|
 | `reach` | `Publisher`, `Config`, `ReachRecord`, `Address`, `Sign`, `Verify`, deltas, group sealing, the cache hook, the prober, the freshness client |
 | `reach/discoverer` | the address sources: `Static`, `DNS`, `Interface`, `STUN`, `TURN` (static, TURN REST and HKDF-HMAC credentials), `UPnP`, `Platform` (Fly, AWS, GCP, Kubernetes, development), `Reflection` |
+| `reach/discovery` | peer discovery for the mesh: `Discoverer`, `PeerAddress`, `MultiDiscoverer` (named layers), `SeedDiscoverer`, `DNSSRVDiscoverer` (SRV under a discovery root, with a cache and TXT metadata; `BrowserDNSDiscoverer` over DNS over HTTPS under js/wasm), `MDNSDiscoverer` (signed announcements over an injected `MDNSTransport`) |
 | `reach/events` | network-change and power events per platform, on one `Bus` |
 
 ## Dependencies
 
 - `github.com/ORBTR/aether`: `NewNodeID`, to bind a record's NodeID to its key,
-  and its capability flags.
+  its capability flags, and `NewDebugLogger` for `discovery`'s debug output.
 - `github.com/bbmumford/ledger`: the record and ledger types reach writes
   (`Record`, `ReachRecord`, `ReachAddress`) and `ledger/storage`.
 - `github.com/bbmumford/ratelimit`: the per-node publish budget
@@ -110,7 +111,9 @@ the caller fills (service name, roles, device id) and the record carries signed.
 Importers in the ORBTR estate:
 
 - `github.com/bbmumford/loom/node`: the platform mesh node publishes its
-  addresses with reach.
+  addresses with reach, and its runtime dials what `discovery` layers find.
+- `github.com/ORBTR/Library/endpoint` and the node.orbtr.io endpoint: each
+  hands the node runtime a `discovery.DNSSRVDiscoverer` for its mesh's root.
 - `github.com/ORBTR/agent/internal/core/wire` (with `discoverer` and
   `events`) and `github.com/ORBTR/agent/systempart`: the device agent.
 
