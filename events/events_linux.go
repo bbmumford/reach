@@ -35,7 +35,10 @@ func NewNetlinkSource() (*NetlinkSource, error) {
 		Groups: rtmGroups(),
 	}
 	if err := unix.Bind(fd, sa); err != nil {
-		unix.Close(fd)
+		// The bind error is the one the caller acts on (it falls back to
+		// Poller); the unbound socket is closed, and a close error would
+		// add nothing to it.
+		_ = unix.Close(fd)
 		return nil, err
 	}
 	return &NetlinkSource{fd: fd}, nil
