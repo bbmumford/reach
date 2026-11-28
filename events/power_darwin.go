@@ -7,12 +7,10 @@ package events
 
 import (
 	"context"
-	"os/exec"
-	"strings"
 	"time"
 )
 
-// DarwinPowerSource polls `pmset -g batt` and `ioreg` for wake events.
+// DarwinPowerSource detects wake events by polling the wall clock.
 // A full IOKit subscription requires CGo (IORegisterForSystemPower); the
 // polling variant avoids cgo and is good enough to notice a 10s gap in
 // clock time that indicates the machine slept.
@@ -60,16 +58,6 @@ func (s *DarwinPowerSource) Start(ctx context.Context, bus *Bus) error {
 
 // Close is a no-op; ctx cancel is the lifecycle signal.
 func (s *DarwinPowerSource) Close() error { return nil }
-
-// pmsetBattery is retained for callers that want the current AC/battery
-// state — not used by the event loop itself.
-func pmsetBattery() string {
-	out, err := exec.Command("pmset", "-g", "batt").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
 
 func itoa(n int) string {
 	if n == 0 {

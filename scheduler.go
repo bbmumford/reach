@@ -22,9 +22,9 @@ const (
 type scheduler struct {
 	cfg *Config
 
-	mu              sync.Mutex
-	start           time.Time
-	recentChanges   []time.Time // timestamps of publishes-caused-by-change
+	mu               sync.Mutex
+	start            time.Time
+	recentChanges    []time.Time // timestamps of publishes-caused-by-change
 	publishesThisMin []time.Time // rolling window for rate limit
 	state            schedulerState
 }
@@ -99,13 +99,6 @@ func (s *scheduler) allowPublish(now time.Time) bool {
 	}
 	s.publishesThisMin = append(s.publishesThisMin, now)
 	return true
-}
-
-// state returns the current scheduler state (for metrics / debug).
-func (s *scheduler) stateNow() schedulerState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.state
 }
 
 func (s *scheduler) updateStateLocked(now time.Time) {
